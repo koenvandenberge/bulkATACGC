@@ -1,0 +1,353 @@
+---
+title: "Liu 2019 ATAC-seq atlas case study"
+author: "Koen Van den Berge"
+date: "5/19/2020"
+output: html_document
+---
+
+```{r}
+gcqn_qsmooth <- function(counts, gcGroups, bio){
+  gcBinNormCounts <- matrix(NA, nrow=nrow(counts), ncol=ncol(counts), dimnames=list(rownames(counts),colnames(counts)))
+  for(ii in 1:nlevels(gcGroups)){
+    id <- which(gcGroups==levels(gcGroups)[ii])
+    countBin <- counts[id,]
+    qs <- qsmooth(countBin, group_factor=bio)
+    normCountBin <- qs@qsmoothData
+    normCountBin <- round(normCountBin)
+    normCountBin[normCountBin<0] <- 0
+    gcBinNormCounts[id,] <- normCountBin
+  }
+  return(gcBinNormCounts)
+}
+library(GenomicAlignments)
+library(rafalib)
+library(cqn)
+library(Biobase)
+library(edgeR)
+library(mclust)
+library(umap)
+source("../../../methods/gcqn_validated.R")
+library(tidyverse)
+library(qsmooth)
+library(RUVSeq)
+library(RColorBrewer)
+plotGCHex <- function(gr, counts){
+  counts2 <- counts
+  df <- as_tibble(cbind(counts2,gc=mcols(gr)$gc))
+  df <- gather(df, sample, value, -gc)
+  ggplot(data=df, aes(x=gc, y=log(value+1)) ) + ylab("log(count + 1)") + xlab("GC content") + geom_hex(bins = 50) + theme_bw() + facet_wrap(~sample, nrow=2) + labs(fill="Number of peaks in hex.")
+}
+
+## read in counts
+counts <- read.table("../../../data/liu2019_atlas/ATACseq_Matrix/chromatin.accessibility.raw.count.txt", header=TRUE, stringsAsFactors = FALSE)
+peakNames <- as.character(counts[,1])
+peakNamesSplit <- strsplit(peakNames, split="_")
+# remove peaks in random chromosomes
+rmPeaks <- which(lapply(peakNamesSplit, length) == 4)
+counts <- counts[-rmPeaks,]
+peakNamesSplit <- peakNamesSplit[-rmPeaks]
+sn <- unlist(lapply(peakNamesSplit, "[[", 1))
+sn <- substr(sn, 4, nchar(sn))
+start <- as.numeric(unlist(lapply(peakNamesSplit, "[[", 2)))
+end <- as.numeric(unlist(lapply(peakNamesSplit, "[[", 3)))
+gr <- GRanges(seqnames=sn, ranges = IRanges(start=start, end=end), strand="*")
+names(gr) <- paste0("peak", 1:length(gr))
+
+# get GC content: please download genome at ftp://ftp.ensembl.org/pub/release-67/fasta/mus_musculus/dna/
+ff <- FaFile("~/data/genomes/mouse/Mus_musculus.NCBIM37.67.dna.toplevel.fa")
+peakSeqs <- getSeq(x=ff, gr)
+gcContentPeaks <- letterFrequency(peakSeqs, "GC",as.prob=TRUE)[,1]
+gcGroups <- Hmisc::cut2(gcContentPeaks, g=20)
+mcols(gr)$gc <- gcContentPeaks
+hist(gcContentPeaks, xlab="GC content", breaks=40)
+
+# remove peak ranges
+counts <- counts[,-1]
+# restrict to samples discussed in paper
+counts <- as.matrix(counts[,!substr(colnames(counts),1,2) == "D0"])
+
+# metadata
+gender <- factor(unlist(lapply(strsplit(colnames(counts), split="_"), "[[", 1)))
+tissue <- factor(unlist(lapply(strsplit(colnames(counts), split="_"), function(x){
+  paste0(x[2:(length(x)-1)], collapse="_")
+})))
+
+# define number of clusters and truth
+truth <- droplevels(interaction(gender, tissue))
+k <- nlevels(truth)
+
+# explore GC content effect in relation to average accessibility
+plotGCHex(gr, rowMeans(counts))
+```
+
+# DESeq2
+
+```{r}
+library(DESeq2)
+dds <- DESeqDataSetFromMatrix(counts,
+                              colData=data.frame(tissue, gender),
+                              design=as.formula("~ tissue + gender"))
+# calculate DESeq2 size factors
+dds <- estimateSizeFactors(dds)
+# extract the size factors and save them in an object
+sf <- sizeFactors(dds)
+# divide each row by the vector of size factors
+normCountsDESeq2 <- sweep(counts, 2, sizeFactors(dds), "/")
+```
+
+# edgeR
+
+```{r}
+library(edgeR)
+d <- DGEList(counts)
+d <- calcNormFactors(d)
+nf <- d$samples$norm.factors
+effLibSize <- colSums(counts) * nf
+effLibSize_scaled <- effLibSize / mean(effLibSize)
+# divide each row by the vector of size factors
+normCountsEdgeR <- sweep(counts, 2, effLibSize_scaled, "/")
+```
+
+# Full quantile normalization
+
+```{r}
+normCountsFQ <- FQnorm(counts, type="median")
+```
+
+# cqn
+
+```{r}
+# run cqn model
+cqnObj <- cqn(counts, x=gcContentPeaks, lengths=width(gr))
+# calculate normalized counts
+normCountsCqn <- 2^(cqnObj$y + cqnObj$offset)
+
+cqnplot(cqnObj, n = 1, xlab = "GC content", ylim = c(-1.5,7), col=tissue)
+cqnplot(cqnObj, n = 2, xlab = "Peak width", ylim = c(-1.5,7), col=tissue)
+```
+
+# EDASeq
+
+```{r}
+library(EDASeq)
+wit <- withinLaneNormalization(as.matrix(counts), gcContentPeaks, which="full", num.bins=50)
+normCountsEDASeq <- betweenLaneNormalization(wit, which="full")
+rm(wit)
+```
+
+# GC-QN
+
+```{r}
+gcGroups <- Hmisc::cut2(gcContentPeaks, g=50)
+normCountsGcqn <- gcqn(counts, gcGroups, "median")
+```
+
+## Smooth GC-QN
+
+```{r}
+normCountsGcqnSmooth <- gcqn_qsmooth(counts, gcGroups, bio=tissue)
+```
+
+
+# Hierarchical clustering
+
+Here we check whether the hierarchy and partitioning of the dataset according to Euclidean distances makes sense biologically.
+We would expect each tissue to be separate, and furthermore that the hierarchy is sensible biologically (e.g., large and small intesting are related).
+
+```{r}
+library(dendextend)
+
+ddRaw <- dist(log1p(t(counts)), method="euclidean")
+ddEdgeR <- dist(log1p(t(normCountsEdgeR)), method="euclidean")
+ddDESeq2 <- dist(log1p(t(normCountsDESeq2)), method="euclidean")
+ddFQ <- dist(log1p(t(normCountsFQ)), method="euclidean")
+ddCqn <- dist(log1p(t(normCountsCqn)), method="euclidean")
+ddEDASeq <- dist(log1p(t(normCountsEDASeq)), method="euclidean")
+ddGCQN <- dist(log1p(t(normCountsGcqn)), method="euclidean")
+ddGCQNSmooth <- dist(log1p(t(normCountsGcqnSmooth)), method="euclidean")
+
+
+plotDD <- function(distMat, col, label, main, cex=1/2, ...){
+  require(dendextend)
+  hdd <- hclust(distMat)
+  dhdd <- as.dendrogram(hdd)
+  origLabels <- labels(dhdd)
+  labels(dhdd) <- label[origLabels]
+  labels_colors(dhdd) <- col[origLabels]
+  dhdd <- set(dhdd, "labels_cex", cex)
+  plot(dhdd, main=main, ...)
+}
+
+colors <- c(palette(), brewer.pal(9, "Dark2"), "steelblue", "darkseagreen3", "blue")
+colTissue <- colors[as.numeric(tissue)]
+names(colTissue) <- colnames(counts)
+label <- as.character(tissue)
+names(label) <- colnames(counts)
+# pdf("~/Dropbox/research/atacseq/bulk/plots/hclust_tissue_liu2019.pdf",
+#     width=7, height=5)
+plotDD(ddRaw, col=colTissue, label=label, main="Raw counts: tissue effect", cex=3/4)
+plotDD(ddEdgeR, col=colTissue, label=label, main="TMM: tissue effect", cex=3/4)
+plotDD(ddDESeq2, col=colTissue, label=label, main="DESeq2 MOR: tissue effect", cex=3/4)
+plotDD(ddFQ, col=colTissue, label=label, main="FQ: tissue effect", cex=3/4)
+plotDD(ddCqn, col=colTissue, label=label, main="cqn: tissue effect", cex=3/4)
+plotDD(ddEDASeq, col=colTissue, label=label, main="FQ-FQ: tissue effect", cex=3/4)
+plotDD(ddGCQN, col=colTissue, label=label, main="GC-QN: tissue effect", cex=3/4)
+plotDD(ddGCQNSmooth, col=colTissue, label=label, main="smooth GC-QN: tissue effect", cex=3/4)
+# dev.off()
+
+```
+
+# Differential accessibility
+
+```{r}
+library(limma)
+library(edgeR)
+
+testVoom <- function(counts, design, L_tissue){
+  d <- DGEList(counts)
+  v <- voom(d, design)
+  fit <- lmFit(v, design)
+  fitcon <- contrasts.fit(fit, contrast=L_tissue)
+  fitcon <- eBayes(fitcon)
+  tt <- topTable(fitcon, number=nrow(counts), sort.by="none")
+  return(tt)
+}
+
+testEdgeR <- function(counts, design, L_tissue, tmm=FALSE, offset=NULL){
+  d <- DGEList(counts)
+  if(tmm) d <- calcNormFactors(d)
+  if(!is.null(offset)) d$offset <- offset
+  d <- estimateDisp(d, design)
+  fit <- glmFit(d, design)
+  lrt <- glmLRT(fit, contrast=L_tissue)
+  lrt$table$padj <- p.adjust(lrt$table$PValue, "fdr")
+  return(lrt)
+}
+
+covarDf <- data.frame(tissue, gender)
+testDESeq2 <- function(counts, covarDf, L_tissue){
+  dds <- DESeqDataSetFromMatrix(counts,
+                              colData=covarDf,
+                              design=as.formula("~ tissue + gender"))
+  dds <- estimateSizeFactors(dds)
+  dds <- DESeq(dds)
+  res <- results(dds, contrast = L_tissue)
+  return(res)
+}
+
+design <- model.matrix(~tissue+gender)
+L_heartLiver <- matrix(0, nrow=ncol(design), ncol=1)
+rownames(L_heartLiver) <- colnames(design)
+L_heartLiver["tissueHeart",1] <- 1
+L_heartLiver["tissueLiver",1] <- -1
+
+resList <- list()
+normMethods <- c("Raw", "DESeq2", "EdgeR", "FQ", "EDASeq", "Cqn", "Gcqn", "GcqnSmooth")
+# for(mm in 1:length(normMethods)){
+#   message(mm)
+#   curMethod <- normMethods[mm]
+#   if(curMethod == "Raw"){
+#     resList[[mm]] <- testEdgeR(counts, design, L_heartLiver)
+#   } else if(curMethod == "DESeq2"){
+#     resList[[mm]] <- testDESeq2(counts, covarDf, L_heartLiver)
+#   } else if(curMethod == "EdgeR"){
+#     resList[[mm]] <- testEdgeR(counts, design, L_heartLiver, tmm=TRUE)
+#   } else if(curMethod == "Cqn"){
+#     resList[[mm]] <- testEdgeR(counts, design, L_heartLiver, offset=cqnObj$glm.offset)
+#   } else if(curMethod %in% c("FQ", "EDASeq", "Gcqn", "GcqnSmooth")){
+#     curCounts <- get(paste0("normCounts", curMethod))
+#     resList[[mm]] <- testEdgeR(curCounts, design, L_heartLiver)
+#   }
+# }
+# saveRDS(resList, file="resList.rds")
+```
+
+## Visualization
+
+```{r}
+resList <- readRDS("resList.rds")
+normMethods[which(normMethods == "EDASeq")] <- "FQ-FQ"
+normMethods[which(normMethods == "Gcqn")] <- "GC-FQ"
+normMethods[which(normMethods == "GcqnSmooth")] <- "smooth GC-FQ"
+normMethods[which(normMethods == "RUV")] <- "RUVSeq"
+names(resList) <- normMethods
+resList <- resList[-length(resList)]
+
+### visualization
+# fold change bias
+# png("~/Dropbox/research/atacseq/bulk/plots/liu_foldChange.png", width=8, units="in", height=7, res=200)
+mypar(mfrow=c(3,3), mar=c(4,4,2,1), bty='l', las=2, cex.axis=3/2, cex.lab=3/2, cex.main=2)
+for(ii in 1:length(resList)){
+  tab <- resList[[ii]]
+  if(ii == 2){
+    boxplot(tab$log2FoldChange ~ gcGroups, ylim=c(2,-2), main=names(resList)[ii],
+            xaxt="n", xlab="GC-content bin", ylab="Log2 fold change")
+    abline(h=0, lwd=2, col="red", lty=2)
+  } else {
+    boxplot(tab$table$logFC ~ gcGroups, ylim=c(2,-2), main=names(resList)[ii],
+            xaxt="n", xlab="GC-content bin", ylab="Log2 fold change")
+    abline(h=0, lwd=2, col="red", lty=2)
+  }
+}
+# dev.off()
+
+### check distribution of GC-content for top 1000 peaks.
+# pdf("~/Dropbox/research/atacseq/bulk/plots/liu_topPeaks.pdf", width=8)
+mypar(mfrow=c(3,3))
+for(ii in 1:length(resList)){
+  tab <- resList[[ii]]
+  if(ii == 2){
+    ## DESeq2
+    topPeaks <- order(tab$stat, decreasing=TRUE)[1:5e3]
+  } else {
+    ## edgeR
+    topPeaks <- order(tab$table$LR, decreasing=TRUE)[1:5e3]
+  }
+  barplot(table(gcGroups[topPeaks]), ylim=c(0,250), main=names(resList)[ii], xaxt="n", xlab="GC-content bin", ylab="Nr. of peaks")
+}
+# dev.off()
+
+# all significant peaks
+nrPeaks <- c()
+mypar(mfrow=c(3,3))
+for(ii in 1:length(resList)){
+  tab <- resList[[ii]]
+  if(ii == 2){
+    ## DESeq2
+    sigPeaks <- which(tab$padj <= 0.05)
+  } else {
+    ## edgeR
+    sigPeaks <- which(p.adjust(tab$table$PValue, "fdr") <= 0.05)
+  }
+  barplot(table(gcGroups[sigPeaks]), ylim=c(0,3200), main=names(resList)[ii], xaxt="n", xlab="GC-content bin")
+  nrPeaks[ii] <- length(sigPeaks)
+}
+nrPeaks
+
+# all significant peaks: relative
+# pdf("~/Dropbox/research/atacseq/bulk/plots/liu_relnrPeaks.pdf", width=8)
+mypar(mfrow=c(3,3), mar=c(4,4,2,1), bty='l', las=2, cex.axis=3/2, cex.lab=3/2, cex.main=2)
+for(ii in 1:length(resList)){
+  tab <- resList[[ii]]
+  if(ii == 2){
+    ## DESeq2
+    sigPeaks <- which(tab$padj <= 0.05)
+  } else {
+    ## edgeR
+    sigPeaks <- which(p.adjust(tab$table$PValue, "fdr") <= 0.05)
+  }
+  
+  barplot(table(gcGroups[sigPeaks]) / table(gcGroups[sigPeaks])[1], ylim=c(0,4), main=names(resList)[ii],xaxt="n", yaxt='n', xlab="GC-content bin")
+  axis(side=2, at=c(0,1,2,3))
+  title(ylab="Relative # peaks", line=1.3, cex.lab=3/2)
+  abline(h=1, col="red", lwd=2, lty=2)
+}
+# dev.off()
+
+names(nrPeaks) <- names(resList)
+barplot(nrPeaks, las=2)
+```
+
+
+
+

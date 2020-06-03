@@ -1,2 +1,5 @@
 data/
 .Rproj.user
+scripts/caseStudies/liu/resList.rds
+scripts/caseStudies/fullard/lrtOut2.rds
+scripts/caseStudies/fullard/*.pdf

@@ -1,0 +1,750 @@
+---
+title: "Fullard2019 Case study"
+author: "Koen Van den Berge"
+date: "2/6/2020"
+output: html_document
+---
+
+
+```{r}
+gcqn_qsmooth <- function(counts, gcGroups, bio){
+  gcBinNormCounts <- matrix(NA, nrow=nrow(counts), ncol=ncol(counts), dimnames=list(rownames(counts),colnames(counts)))
+  for(ii in 1:nlevels(gcGroups)){
+    id <- which(gcGroups==levels(gcGroups)[ii])
+    countBin <- counts[id,]
+    qs <- qsmooth(countBin, group_factor=bio)
+    normCountBin <- qs@qsmoothData
+    normCountBin <- round(normCountBin)
+    normCountBin[normCountBin<0] <- 0
+    gcBinNormCounts[id,] <- normCountBin
+  }
+  return(gcBinNormCounts)
+}
+
+library(grDevices)
+palette(c("black", "#DF536B", "#61D04F", "#2297E6", "#28E2E5", "#D03AF5", "#EEC21F", "gray62"))
+library(GenomicAlignments)
+library(rafalib)
+library(cqn)
+library(Biobase)
+library(edgeR)
+library(mclust)
+library(umap)
+source("../../../methods/gcqn_validated.R")
+library(tidyverse)
+library(viridis)
+library(qsmooth)
+library(RUVSeq)
+plotGCHex <- function(gr, counts){
+  counts2 <- counts
+  df <- as_tibble(cbind(counts2,gc=mcols(gr)$gc))
+  df <- gather(df, sample, value, -gc)
+  ggplot(data=df, aes(x=gc, y=log(value+1)) ) + ylab("log(count + 1)") + xlab("GC content") + geom_hex(bins = 50) + theme_bw() + facet_wrap(~sample, nrow=2)
+}
+plotRD <- function(rd, celltype, region, col=NULL, ...){
+  if(is.null(col)) col <- 1:nlevels(region)
+  plot(rd, pch=as.numeric(celltype)+15, col=col[region], 
+       xlab="Dimension 1", ylab="Dimension 2", ...)
+  legend("bottomleft", c("neuronal", "non-neuronal"), pch=c(16,17), bty='n')
+  legend("topleft", levels(region), pch=16, col=col[1:nlevels(region)], bty='n')
+}
+
+counts <- as.matrix(read.table("../../../data/fullard2019/boca_raw_count_matrix.tsv", header=TRUE, stringsAsFactors = FALSE))
+peaks <- read.table("../../../data/fullard2019/boca_peaks_consensus_no_blacklisted_regions.bed", header=FALSE, stringsAsFactors = FALSE)
+colnames(peaks) <- c("chromosome", "start", "end", "name")
+
+peakNames <- peaks$name
+sn <- substr(peaks$chromosome, 4, sapply(peaks$chromosome, nchar))
+start <- peaks$start
+end <- peaks$end
+gr <- GRanges(seqnames=sn, ranges = IRanges(start=start, end=end), strand="*")
+names(gr) <- peaks$name
+
+# get GC content
+ff <- FaFile("~/data/genomes/human/Homo_sapiens.GRCh37.75.dna_sm.primary_assembly.fa")
+peakSeqs <- getSeq(x=ff, gr)
+gcContentPeaks <- letterFrequency(peakSeqs, "GC",as.prob=TRUE)[,1]
+gcGroups <- Hmisc::cut2(gcContentPeaks, g=20)
+mcols(gr)$gc <- gcContentPeaks
+
+# design
+# the data should consist of 2 cell types (neurons and non-neurons) across 14 distinct brain regions of 5 individuals
+colnames(counts) <- gsub(x=colnames(counts),pattern="^X", replacement="")
+individual <- factor(unlist(lapply(strsplit(colnames(counts), split="_"), "[[", 1)))
+names(individual) <- colnames(counts)
+celltype <- factor(unlist(lapply(strsplit(colnames(counts), split="_"), "[[", 2)))
+names(celltype) <- colnames(counts)
+region <- factor(unlist(lapply(strsplit(colnames(counts), split="_"), "[[", 3)))
+names(region) <- colnames(counts)
+## they also define groups of regions: https://bendlj01.u.hpc.mssm.edu/multireg/
+regionBig <- as.character(region)
+regionBig[region %in% c("DLPFC", "OFC", "VLPFC", "ACC", "STC", "ITC", "PMC", "INS")] <- "NCX"
+regionBig[region %in% c("NAC", "PUT")] <- "STR"
+regionBig <- factor(regionBig)
+rawCounts <- counts
+```
+
+# Get normalized count matrices
+
+
+## DESeq2
+
+```{r}
+library(DESeq2)
+dds <- DESeqDataSetFromMatrix(counts,
+                              colData=data.frame(individual, celltype, region),
+                              design=as.formula("~ individual + celltype*region"))
+# calculate DESeq2 size factors
+dds <- estimateSizeFactors(dds)
+# extract the size factors and save them in an object
+sf <- sizeFactors(dds)
+# divide each row by the vector of size factors
+normCountsDESeq2 <- sweep(counts, 2, sizeFactors(dds), "/")
+```
+
+## edgeR
+
+```{r}
+library(edgeR)
+d <- DGEList(counts)
+d <- calcNormFactors(d)
+nf <- d$samples$norm.factors
+effLibSize <- colSums(counts) * nf
+effLibSize_scaled <- effLibSize / mean(effLibSize)
+# divide each row by the vector of size factors
+normCountsEdgeR <- sweep(counts, 2, effLibSize_scaled, "/")
+```
+
+## Full quantile normalization
+
+```{r}
+normCountsFQ <- FQnorm(counts, type="median")
+```
+
+## cqn
+
+```{r}
+# run cqn model
+cqnObj <- cqn(counts, x=gcContentPeaks, lengths=width(gr))
+# calculate normalized counts
+normCountsCqn <- 2^(cqnObj$y + cqnObj$offset)
+
+cqnplot(cqnObj, n=1)
+cqnplot(cqnObj, n=2)
+
+```
+
+```{r}
+# run cqn model
+cqnObj_noLength <- cqn(counts, x=gcContentPeaks, lengths=1000, lengthMethod="fixed")
+# calculate normalized counts
+normCountsCqn_noLength <- 2^(cqnObj$y + cqnObj$offset)
+```
+
+## EDASeq
+
+```{r}
+library(EDASeq)
+wit <- withinLaneNormalization(as.matrix(counts), gcContentPeaks, which="full")
+normCountsEDASeq <- betweenLaneNormalization(wit, which="full")
+rm(wit)
+```
+
+
+## GC-QN
+
+```{r}
+gcGroups <- Hmisc::cut2(gcContentPeaks, g=50)
+normCountsGcqn <- gcqn(counts, gcGroups, "median")
+```
+
+## Smooth GC-QN
+
+```{r}
+normCountsGcqnSmooth <- gcqn_qsmooth(counts, gcGroups, bio=droplevels(interaction(celltype, region)))
+```
+
+# PCA
+
+```{r}
+set.seed(44)
+
+pcaPlot <- function(pca, regionBig, celltype){
+  require(ggplot2)
+  pctVar <- pca$sdev^2 / sum(pca$sdev^2)
+  df <- data.frame(PC1=pca$x[,1], PC2=pca$x[,2])
+  df %>% ggplot(., aes(x=PC1, y=PC2, colour=regionBig, shape=celltype)) +
+    geom_point(size=3) +
+    theme_classic() + 
+    xlab(paste0("PC 1 (",round(pctVar[1],3)*100,"%)")) +
+    ylab(paste0("PC 2 (",round(pctVar[2],3)*100,"%)"))
+}
+
+
+
+normMethods <- c("Raw", "DESeq2", "EdgeR", "FQ", "EDASeq", "Cqn", "Gcqn", "GcqnSmooth")
+titles <- c("None", "DESeq2", "edgeR", "Full quantile", "FQ-FQ", "cqn", "GC-FQ", "smooth GC-FQ")
+pcaPlots <- list()
+for(mm in 1:length(normMethods)){
+    curMethod <- normMethods[mm]
+    if(curMethod == "Raw"){
+      curCounts <- as.matrix(counts)
+    } else {
+      curCounts <- as.matrix(get(paste0("normCounts",curMethod)))
+    }
+    pca <- prcomp(t(log1p(curCounts)))
+    pctVar <- pca$sdev^2 / sum(pca$sdev^2)
+    pcaPlots[[mm]] <- pcaPlot(pca, regionBig, celltype) + ggtitle(titles[mm])
+}
+names(pcaPlots) <- normMethods
+cowplot::plot_grid(plotlist=pcaPlots)
+# ggsave("~/Dropbox/research/atacseq/bulk/plots/fullard_pcaPlots.pdf", width=12, height=12)
+```
+
+# Hierarchical tree
+
+```{r}
+library(dendextend)
+
+ddRaw <- dist(log1p(t(counts)), method="euclidean")
+ddEdgeR <- dist(log1p(t(normCountsEdgeR)), method="euclidean")
+ddDESeq2 <- dist(log1p(t(normCountsDESeq2)), method="euclidean")
+ddFQ <- dist(log1p(t(normCountsFQ)), method="euclidean")
+ddCqn <- dist(log1p(t(normCountsCqn)), method="euclidean")
+ddEDASeq <- dist(log1p(t(normCountsEDASeq)), method="euclidean")
+ddGCQN <- dist(log1p(t(normCountsGcqn)), method="euclidean")
+ddGCQNSmooth <- dist(log1p(t(normCountsGcqnSmooth)), method="euclidean")
+
+
+plotDD <- function(dist, col, label, main, cex=1/2, ...){
+  require(dendextend)
+  hdd <- hclust(dist)
+  dhdd <- as.dendrogram(hdd)
+  origLabels <- labels(dhdd)
+  labels(dhdd) <- label[origLabels]
+  labels_colors(dhdd) <- col[origLabels]
+  dhdd <- set(dhdd, "labels_cex", cex)
+  plot(dhdd, main=main, ...)
+}
+
+
+## cell type effect
+colCelltype <- as.numeric(celltype)
+names(colCelltype) <- names(celltype)
+# pdf("~/Dropbox/research/atacseq/bulk/plots/hclust_celltype_fullard2018.pdf",
+#     width=7, height=5)
+plotDD(ddRaw, col=colCelltype, label=celltype, main="Raw counts: celltype effect")
+plotDD(ddEdgeR, col=colCelltype, label=celltype, main="edgeR norm: celltype effect")
+plotDD(ddDESeq2, col=colCelltype, label=celltype, main="DESeq2 norm: celltype effect")
+plotDD(ddFQ, col=colCelltype, label=celltype, main="FQ norm: celltype effect")
+plotDD(ddCqn, col=colCelltype, label=celltype, main="Cqn norm: celltype effect")
+plotDD(ddEDASeq, col=colCelltype, label=celltype, main="FQ-FQ norm: celltype effect")
+plotDD(ddGCQN, col=colCelltype, label=celltype, main="GC-FQ norm: celltype effect")
+plotDD(ddGCQNSmooth, col=colCelltype, label=celltype, main="smooth GC-FQ norm: celltype effect")
+# dev.off()
+
+## individual effect
+colIndividual <- as.numeric(individual)
+names(colIndividual) <- names(individual)
+plotDD(ddRaw, col=colIndividual, label=individual, main="Raw counts: individual effect")
+plotDD(ddEdgeR, col=colIndividual, label=individual, main="edgeR norm: individual effect")
+plotDD(ddDESeq2, col=colIndividual, label=individual, main="DESeq2 norm: individual effect")
+plotDD(ddFQ, col=colIndividual, label=individual, main="FQ norm: individual effect")
+plotDD(ddCqn, col=colIndividual, label=individual, main="Cqn norm: individual effect")
+plotDD(ddEDASeq, col=colIndividual, label=individual, main="EDASeq norm: individual effect")
+plotDD(ddGCQN, col=colIndividual, label=individual, main="GC-QN norm: individual effect")
+plotDD(ddGCQNSmooth, col=colIndividual, label=individual, main="smooth GC-QN norm: individual effect")
+
+## region effect
+colRegion <- as.numeric(region)
+names(colRegion) <- names(region)
+plotDD(ddRaw, col=colRegion, label=region, main="Raw counts: region effect")
+plotDD(ddEdgeR, col=colRegion, label=region, main="edgeR norm: region effect")
+plotDD(ddDESeq2, col=colRegion, label=region, main="DESeq2 norm: region effect")
+plotDD(ddFQ, col=colRegion, label=region, main="FQ norm: region effect")
+plotDD(ddCqn, col=colRegion, label=region, main="Cqn norm: region effect")
+plotDD(ddEDASeq, col=colRegion, label=region, main="EDASeq norm: region effect")
+plotDD(ddGCQN, col=colRegion, label=region, main="GC-QN norm: region effect")
+plotDD(ddGCQNSmooth, col=colRegion, label=region, main="smooth GC-QN norm: region effect")
+
+```
+
+# clustering based on PCA
+
+```{r}
+library(irlba)
+library(uwot)
+library(cluster)
+library(mclust)
+library(ggplot2)
+umapDR <- function(counts, nPC=6){
+  pc <- irlba::irlba(log1p(counts), nv=nPC)
+  umDR <- uwot::umap(pc$v)
+  return(umDR)
+}
+
+pcs <- c(2, 5, 8, 10)
+ariMatCT <- matrix(NA, nrow=8, ncol=length(pcs))
+rownames(ariMatCT) <- c("Raw", "edgeR", "DESeq2", "FQ", "Cqn", "EDASeq", "GC-QN", "smooth GC-QN")
+ariMatRegion <- matrix(NA, nrow=8, ncol=length(pcs))
+rownames(ariMatRegion) <- c("Raw", "edgeR", "DESeq2", "FQ", "Cqn", "EDASeq", "GC-QN", "smooth GC-QN")
+for(pp in 1:length(pcs)){
+  set.seed(pp)
+  nPC <- pcs[pp]
+  
+  umRaw <- irlba::irlba(log1p(counts), nv=nPC)$v
+  umEdgeR <- irlba::irlba(log1p(normCountsEdgeR), nv=nPC)$v
+  umDESeq2 <- irlba::irlba(log1p(normCountsDESeq2), nv=nPC)$v
+  umFQ <- irlba::irlba(log1p(normCountsFQ), nv=nPC)$v
+  umCqn <- irlba::irlba(log1p(normCountsCqn), nv=nPC)$v
+  umEDASeq <- irlba::irlba(log1p(normCountsEDASeq), nv=nPC)$v
+  umGcqn <- irlba::irlba(log1p(normCountsGcqn), nv=nPC)$v
+  umGcqnSmooth <- irlba::irlba(log1p(normCountsGcqnSmooth), nv=nPC)$v
+
+  
+  plotRD(umRaw, celltype, regionBig, main="Raw counts")
+  plotRD(umEdgeR, celltype, regionBig, main="edgeR counts")
+  plotRD(umDESeq2, celltype, regionBig, main="DESeq2 counts")
+  plotRD(umFQ, celltype, regionBig, main="FQ counts")
+  plotRD(umCqn, celltype, regionBig, main="Cqn counts")
+  plotRD(umEDASeq, celltype, regionBig, main="EDASeq counts")
+  plotRD(umGcqn, celltype, regionBig, main="GCQN counts")
+  plotRD(umGcqnSmooth, celltype, regionBig, main="smooth GCQN counts")
+
+  ariMatCT[1,pp] <- mclust::adjustedRandIndex(pam(umRaw, k=2)$clustering, celltype)
+  ariMatCT[2,pp] <- mclust::adjustedRandIndex(pam(umEdgeR, k=2)$clustering, celltype)
+  ariMatCT[3,pp] <- mclust::adjustedRandIndex(pam(umDESeq2, k=2)$clustering, celltype)
+  ariMatCT[4,pp] <- mclust::adjustedRandIndex(pam(umFQ, k=2)$clustering, celltype)
+  ariMatCT[5,pp] <- mclust::adjustedRandIndex(pam(umCqn, k=2)$clustering, celltype)
+  ariMatCT[6,pp] <- mclust::adjustedRandIndex(pam(umEDASeq, k=2)$clustering, celltype)
+  ariMatCT[7,pp] <- mclust::adjustedRandIndex(pam(umGcqn, k=2)$clustering, celltype)
+  ariMatCT[8,pp] <- mclust::adjustedRandIndex(pam(umGcqnSmooth, k=2)$clustering, celltype)
+
+  ariMatRegion[1,pp] <- mclust::adjustedRandIndex(pam(umRaw, k=nlevels(regionBig)*nlevels(celltype))$clustering, interaction(regionBig,celltype))
+  ariMatRegion[2,pp] <- mclust::adjustedRandIndex(pam(umEdgeR, k=nlevels(regionBig)*nlevels(celltype))$clustering, interaction(regionBig,celltype))
+  ariMatRegion[3,pp] <- mclust::adjustedRandIndex(pam(umDESeq2, k=nlevels(regionBig)*nlevels(celltype))$clustering, interaction(regionBig,celltype))
+  ariMatRegion[4,pp] <- mclust::adjustedRandIndex(pam(umFQ, k=nlevels(regionBig)*nlevels(celltype))$clustering, interaction(regionBig,celltype))
+  ariMatRegion[5,pp] <- mclust::adjustedRandIndex(pam(umCqn, k=nlevels(regionBig)*nlevels(celltype))$clustering, interaction(regionBig,celltype))
+  ariMatRegion[6,pp] <- mclust::adjustedRandIndex(pam(umEDASeq, k=nlevels(regionBig)*nlevels(celltype))$clustering, interaction(regionBig,celltype))
+  ariMatRegion[7,pp] <- mclust::adjustedRandIndex(pam(umGcqn, k=nlevels(regionBig)*nlevels(celltype))$clustering, interaction(regionBig,celltype))
+  ariMatRegion[8,pp] <- mclust::adjustedRandIndex(pam(umGcqnSmooth, k=nlevels(regionBig)*nlevels(celltype))$clustering, interaction(regionBig,celltype))
+
+}
+
+ariPlot <- function(ariMat){
+  ariMat <- as.data.frame(ariMat)
+  colnames(ariMat) <- paste0(pcs,"PC")
+  ariMatLong <- tidyr::gather(ariMat)
+    ariMatLong$method <- factor(rep(c("Raw", "edgeR", "DESeq2", "FQ", "Cqn", "FQ-FQ", "GC-FQ", "smooth GC-FQ"), length(pcs)))
+  ariMatLong$gc <- ifelse(ariMatLong$method %in% c("Cqn", "FQ-FQ", "GC-FQ", "smooth GC-FQ"), TRUE, FALSE)
+  ariMatLong$key <- factor(ariMatLong$key, levels=c("2PC", "5PC", "8PC", "10PC"))
+  
+  ggplot(ariMatLong, aes(x=key, y=value, color=method, shape=gc)) +
+    geom_jitter(width=.1, height=0, size=3) +
+    theme_classic() +
+    xlab("Number of PCs") +
+    ylab("Adjusted Rand Index") +
+    scale_shape_discrete(name="GC-aware")
+}
+
+# for clustering according to cell type, the decrease in ARI is lower for GC-aware methods
+# possibly because they don't let technical GC effects contaminate the PCs.
+ariPlot(ariMatCT)
+# ggsave("~/Dropbox/research/atacseq/bulk/plots/fullard2018_ariCelltype.pdf", width = 8)
+ariRegion <- ariPlot(ariMatRegion)
+ariRegion
+
+barplot(rowMeans(ariMatRegion), las=2)
+```
+
+
+# DA analysis, neuronal vs non-neuronal
+
+## MA-plots and intersections
+
+
+```{r}
+
+testEdgeR <- function(counts, design, L, tmm=FALSE, offset=NULL){
+  d <- DGEList(counts)
+  if(tmm) d <- calcNormFactors(d)
+  if(!is.null(offset)) d$offset <- offset
+  d <- estimateDisp(d, design)
+  fit <- glmFit(d, design)
+  lrt <- glmLRT(fit, contrast=L)
+  lrt$table$padj <- p.adjust(lrt$table$PValue, "fdr")
+  return(lrt)
+}
+
+covarDf <- data.frame(region, celltype, individual)
+testDESeq2 <- function(counts, covarDf, L){
+  dds <- DESeqDataSetFromMatrix(counts,
+                              colData=covarDf,
+                              design=as.formula("~ region*celltype + individual"))
+  dds <- estimateSizeFactors(dds)
+  dds <- DESeq(dds)
+  res <- results(dds, contrast = L)
+  return(res)
+}
+
+design <- model.matrix(~region*celltype + individual)
+L_neur <- matrix(0, nrow=ncol(design), ncol=1)
+rownames(L_neur) <- colnames(design)
+L_neur[2:14,1] <- 1/14 #all regions of non-neuronal
+L_neur["celltypeN",1] <- -1 #main neuronal effect
+L_neur[grep(x=rownames(L_neur), pattern="^region.*celltypeN$"),1] <- -c(1/14) #all regions of neuronal
+
+maPlotGC <- function(M, A, gc){
+  require(ggplot2)
+  df <- data.frame(M, A, gc)
+  df %>% ggplot(., aes(x=M, y=A, colour=gc)) +
+    geom_point(size=1/2, alpha=1/4) +
+    scale_color_gradientn(colours=wesanderson::wes_palette("Zissou1", n=10, type="continuous"), name="GC content", breaks=quantile(gc, probs=seq(0,1,length=10)), labels=NULL) +
+    theme_classic() + 
+    theme(legend.position = "none") +
+    geom_hline(aes(yintercept=0)) +
+    geom_smooth(data=df, mapping=aes(x=M, y=A), se=FALSE) +
+    xlab("Average log counts per million") +
+    ylab("Log2 fold change")
+}
+
+maPlotGC_hex <- function(M, A, gc, ng=20){
+  require(ggplot2)
+  df <- data.frame(M, A, gc)
+  df %>% ggplot(., aes(x=M, y=A)) +
+    stat_summary_hex(aes(z = gc), fun="mean", show.legend=FALSE, bins = 20) +
+    theme_classic() +
+    scale_fill_gradientn(colours=wesanderson::wes_palette("Zissou1", n=ng, type="continuous"), name="GC content", labels=NULL) + #, limits=c(0.2,0.775)) +
+    geom_hline(aes(yintercept=0)) +
+    geom_smooth(data=df, mapping=aes(x=M, y=A), se=FALSE) +
+    xlab("Average log counts per million") +
+    ylab("Log2 fold change")
+}
+
+gcBoxplot <- function(df, title){
+  ggplot(df) +
+  aes(x=gc, y=logFC, color=gc) +
+  geom_violin() +
+  geom_boxplot(width=0.1) +
+  scale_color_manual(values=wesanderson::wes_palette("Zissou1", nlevels(df$gc), "continuous")) +
+  geom_abline(intercept = 0, slope = 0, col="black", lty=2) +
+  theme_bw() +
+  ylim(c(-2,2)) +
+  xlab("GC-content bin") +
+  ggtitle(title) +
+  theme(axis.text.x = element_text(size=0),
+        legend.position = "none",
+        axis.title = element_text(size=16))
+}
+
+
+
+normMethods <- c("Raw", "DESeq2", "EdgeR", "FQ", "EDASeq", "Cqn", "Cqn_noLength", "Gcqn", "GcqnSmooth")
+# lrtOut <- list()
+# for(mm in 4:length(normMethods)){
+#     curMethod <- normMethods[mm]
+#     if(curMethod == "Raw"){
+#       curCounts <- as.matrix(rawCounts)
+#       lrtOut[[mm]] <- testEdgeR(curCounts, design, L_neur)
+#       next
+#     } else if (curMethod == "EdgeR"){
+#       curCounts <- as.matrix(rawCounts)
+#       lrtOut[[mm]] <- testEdgeR(curCounts, design, L_neur, tmm=TRUE)
+#       next
+#     } else if (curMethod == "DESeq2"){
+#       curCounts <- as.matrix(rawCounts)
+#       lrtOut[[mm]] <- testDESeq2(curCounts, covarDf, L_neur)
+#       next
+#     } else if (curMethod == "Cqn"){
+#       curCounts <- as.matrix(rawCounts)
+#       lrtOut[[mm]] <- testEdgeR(curCounts, design, L_neur, offset=cqnObj$glm.offset)
+#       next
+#     } else if(curMethod == "Cqn_noLength"){
+#       curCounts <- as.matrix(rawCounts)
+#       lrtOut[[mm]] <- testEdgeR(curCounts, design, L_neur, offset=cqnObj_noLength$glm.offset)
+#       next
+#     } else if(curMethod == "RUV"){
+#       curCounts <- as.matrix(rawCounts)
+#       lrtOut[[mm]] <- testEdgeR(curCounts, designRUV, L_neurRUV)
+#     } else if(curMethod %in% c("FQ", "EDASeq", "Gcqn", "GcqnSmooth")){
+#       curCounts <- as.matrix(get(paste0("normCounts",curMethod)))
+#       lrtOut[[mm]] <- testEdgeR(curCounts, design, L_neur)
+#     }
+# }
+# saveRDS(lrtOut, file="lrtOut2.rds")
+lrtOut <- readRDS("lrtOut2.rds")
+
+titles <- c("Raw", "DESeq2", "edgeR", "FQ", "FQ-FQ", "cqn", "cqn_noLength", "GC-FQ", "smooth GC-FQ")
+
+pList <- c()
+for(kk in 1:length(lrtOut)){
+  if(kk == 2){
+    pList[[kk]] <- maPlotGC(M=aveLogCPM(normCountsDESeq2), A=lrtOut[[kk]]$log2FoldChange, gc=gcContentPeaks) +
+    ggtitle(titles[kk])
+  } else {
+    pList[[kk]] <- maPlotGC(M=lrtOut[[kk]]$table$logCPM, A=lrtOut[[kk]]$table$logFC, gc=gcContentPeaks) +
+    ggtitle(titles[kk])
+  }
+}
+cowplot::plot_grid(plotlist=pList)
+# ggsave("~/Dropbox/research/atacseq/bulk/plots/fullard_maPlots.pdf", width=8, height=8)
+# ggsave("~/Dropbox/research/atacseq/bulk/plots/fullard_maPlots.png", width=8, height=8, dpi=150)
+
+
+pListHex <- c()
+for(kk in 1:length(lrtOut)){
+  if(kk == 2){
+    pListHex[[kk]] <- maPlotGC_hex(M=aveLogCPM(normCountsDESeq2), A=lrtOut[[kk]]$log2FoldChange, gc=gcContentPeaks) +
+    ggtitle(titles[kk]) + ylim(c(-5,5)) + coord_fixed()
+  } else {
+  pListHex[[kk]] <- maPlotGC_hex(M=lrtOut[[kk]]$table$logCPM, A=lrtOut[[kk]]$table$logFC, gc=gcContentPeaks) +
+    ggtitle(titles[kk]) + ylim(c(-5,5)) + coord_fixed()
+  }
+}
+names(pListHex) <- titles
+cowplot::plot_grid(plotlist=pListHex)
+# ggsave("~/Dropbox/research/atacseq/bulk/plots/fullard_maPlots_hex.pdf", width=8, height=8)
+
+
+pListBox <- list()
+gcGroups20 <- Hmisc::cut2(gcContentPeaks, g=20)
+for(kk in 1:length(lrtOut)){
+  if(kk == 2){
+    df <- data.frame(gc=gcGroups20, logFC=lrtOut[[kk]]$log2FoldChange)
+    pListBox[[kk]] <- gcBoxplot(df, titles[kk])
+  } else {
+    df <- data.frame(gc=gcGroups20, logFC=lrtOut[[kk]]$table$logFC)
+    pListBox[[kk]] <- gcBoxplot(df, titles[kk]) 
+  }
+}
+cowplot::plot_grid(plotlist=pListBox)
+# ggsave("~/Dropbox/research/atacseq/bulk/plots/fullard_boxplots.pdf", width=16, height=10)
+
+
+library(UpSetR)
+daPeaks <- list()
+for(kk in 1:length(lrtOut)){
+  if(kk == 2){
+    daPeaks[[kk]] <- which(lrtOut[[kk]]$padj <= 0.05)
+  } else {
+    daPeaks[[kk]] <- which(p.adjust(lrtOut[[kk]]$table$PValue, "fdr") <= 0.05)
+  }
+}
+barplot(unlist(lapply(daPeaks, length)),
+        names=normMethods, ylab="Nr DA peaks")
+
+
+names(daPeaks) <- titles 
+# pdf("~/Dropbox/research/atacseq/bulk/plots/fullard_upset.pdf")
+upset(fromList(daPeaks), nsets=9, nintersects=10, keep.order=TRUE, order.by="freq")
+# dev.off()
+```
+
+
+## Plot for paper
+
+```{r}
+M=lrtOut[[1]]$table$logCPM
+A=lrtOut[[1]]$table$logFC
+gc=gcContentPeaks
+df <- data.frame(M, A, gc)
+hlp <- df %>% ggplot(., aes(x=M, y=A)) +
+    stat_summary_hex(aes(z = gc)) +
+    theme_classic() +
+    scale_fill_gradientn(colours=wesanderson::wes_palette("Zissou1", n=10, type="continuous"), name="GC content", labels=NULL) +
+    geom_hline(aes(yintercept=0)) +
+    geom_smooth(data=df, mapping=aes(x=M, y=A), se=FALSE) +
+    xlab("Average log counts per million") +
+    ylab("Log2 fold change")
+leg <- ggpubr::get_legend(hlp)
+
+
+cols <- wesanderson::wes_palette("Zissou1", n=10, type="continuous")
+
+pcaAriPlots <- cowplot::plot_grid(pcaPlots[["EDASeq"]] + ggtitle("") + labs(colour="Region", shape="Cell type") + coord_fixed(), 
+                                  ariRegion + scale_color_viridis_d(),
+                                  nrow=2, ncol=1, labels=c("a", "b"))
+maPlots <- cowplot::plot_grid(plotlist=pListHex[c("edgeR", "FQ", "FQ-FQ", "cqn")],
+                     nrow=2, ncol=2)
+
+cowplot::plot_grid(pcaAriPlots,
+                   maPlots,
+                   leg,
+                   labels=c("", "c",""),
+                   nrow=1, ncol=3,
+                   rel_widths = c(1,1.2,.3))
+# ggsave("~/Dropbox/research/atacseq/bulk/plots/fullard_mainFigure.pdf", width=13, height=9)
+```
+
+
+
+
+## Biological interpretation
+
+### Overlap with known features
+
+```{r}
+# overlap with known genomic features
+# note that hg19 is synonym for GRCh37
+library(ChIPpeakAnno)
+library(TxDb.Hsapiens.UCSC.hg19.knownGene)
+library(EnsDb.Hsapiens.v75)
+library(org.Hs.eg.db)
+data(TSS.human.GRCh37)
+peakFeaturesAll <- suppressWarnings(assignChromosomeRegion(gr, nucleotideLevel=FALSE,
+                                                  TxDb=TxDb.Hsapiens.UCSC.hg19.knownGene))
+barplot(peakFeaturesAll$percentage, las=1) # across all peaks
+```
+
+### GO enrichment on intersection
+
+Enriched GO terms on intersection of peaks make a lot of sense.
+
+```{r}
+intersectDAPeaks <- Reduce(intersect, daPeaks)
+peakFeaturesIst <- suppressWarnings(assignChromosomeRegion(gr[intersectDAPeaks],
+                                                           nucleotideLevel=FALSE,
+                                                  TxDb=TxDb.Hsapiens.UCSC.hg19.knownGene))
+# intersection is enriched in expected biological features
+barplot(peakFeaturesIst$percentage / peakFeaturesAll$percentage) ; abline(h=1, lty=2)
+
+
+annoData <- toGRanges(EnsDb.Hsapiens.v75, feature="gene")
+sn <- as.character(seqnames(annoData))
+sn <- factor(gsub(x=sn, pattern="chr", replacement=""))
+annoData <- GRanges(seqnames=sn, ranges=ranges(annoData), strand=strand(annoData),
+                    mcols=mcols(annoData))
+istPeaksAnnotated <- suppressWarnings(annotatePeakInBatch(gr[intersectDAPeaks],
+                                                           AnnotationData=annoData,
+                                                         output="nearestBiDirectionalPromoters",
+                                                         bindingRegion=c(-2000, 500)))
+goRes <- getEnrichedGO(istPeaksAnnotated, orgAnn="org.Hs.eg.db", maxP=.05, 
+                       minGOterm=10, multiAdjMethod="BH", condense=FALSE)
+goResUniq <- lapply(goRes, function(tab){
+  tab2 <- unique(tab[,1:10])
+  tab2 <- tab2[order(tab2$pvalue, decreasing=FALSE),]
+  rownames(tab2) <- NULL
+  tab2
+  })
+
+head(goResUniq$bp)
+head(goResUniq$mf)
+head(goResUniq$cc)
+
+xtable::xtable(head(goResUniq$bp[,c(1:2,10)], n=20), digits=4)
+xtable::xtable(head(goResUniq$cc[,c(1:2,10)], n=20), digits=4)
+
+```
+
+### GO enrichment on peaks only found by cqn
+
+```{r}
+cqnPeaks <- unique(c(daPeaks$cqn, daPeaks$cqn_noLength))
+otherPeaks <- unique(do.call(c, daPeaks[!names(daPeaks) %in% c("cqn", "cqn_noLength")]))
+cqnUniquePeaks <- cqnPeaks[!cqnPeaks %in% otherPeaks]
+
+### interesting genomic features are depleted, re-encouraging these could be FP results
+peakFeaturesCqn <- suppressWarnings(assignChromosomeRegion(gr[cqnUniquePeaks],
+                                                           nucleotideLevel=FALSE,
+                                                  TxDb=TxDb.Hsapiens.UCSC.hg19.knownGene))
+barplot(peakFeaturesCqn$percentage / peakFeaturesAll$percentage) ; abline(h=1, lty=2)
+
+
+## GO enrichment recovers no gene sets.
+annoData <- toGRanges(EnsDb.Hsapiens.v75, feature="gene")
+sn <- as.character(seqnames(annoData))
+sn <- factor(gsub(x=sn, pattern="chr", replacement=""))
+annoData <- GRanges(seqnames=sn, ranges=ranges(annoData), strand=strand(annoData),
+                    mcols=mcols(annoData))
+cqnPeaksAnnotated <- suppressWarnings(annotatePeakInBatch(gr[cqnUniquePeaks],
+                                                           AnnotationData=annoData,
+                                                         output="nearestBiDirectionalPromoters",
+                                                         bindingRegion=c(-2000, 500)))
+goResCqn <- getEnrichedGO(cqnPeaksAnnotated, orgAnn="org.Hs.eg.db", maxP=.05, 
+                       minGOterm=10, multiAdjMethod="BH", condense=FALSE)
+goResCqnUniq <- lapply(goResCqn, function(tab){
+  tab2 <- unique(tab[,1:10])
+  tab2 <- tab2[order(tab2$pvalue, decreasing=FALSE),]
+  rownames(tab2) <- NULL
+  tab2
+  })
+
+head(goResCqnUniq$bp)
+head(goResCqnUniq$mf)
+head(goResCqnUniq$cc)
+
+xtable::xtable(head(goResCqnUniq$bp[,c(1:2,10)], n=20), digits=4)
+xtable::xtable(head(goResCqnUniq$cc[,c(1:2,10)], n=20), digits=4)
+
+# fraction annotated
+length(cqnPeaksAnnotated) / length(cqnUniquePeaks)
+```
+
+
+### GO enrichment on peaks only found by FQ-FQ and GC-FQ but not FQ
+
+```{r}
+gcfqPeaks <- unique(c(daPeaks$`FQ-FQ`, daPeaks$`GC-FQ`))
+fqPeaks <- daPeaks$FQ
+gcfqUniquePeaks <- gcfqPeaks[!gcfqPeaks %in% fqPeaks]
+
+### genomic features
+peakFeaturesGcfq <- suppressWarnings(assignChromosomeRegion(gr[gcfqUniquePeaks],
+                                                           nucleotideLevel=FALSE,
+                                                  TxDb=TxDb.Hsapiens.UCSC.hg19.knownGene))
+barplot(peakFeaturesGcfq$percentage / peakFeaturesAll$percentage) ; abline(h=1, lty=2)
+
+
+## GO enrichment recovers no gene sets.
+annoData <- toGRanges(EnsDb.Hsapiens.v75, feature="gene")
+sn <- as.character(seqnames(annoData))
+sn <- factor(gsub(x=sn, pattern="chr", replacement=""))
+annoData <- GRanges(seqnames=sn, ranges=ranges(annoData), strand=strand(annoData),
+                    mcols=mcols(annoData))
+gcfqPeaksAnnotated <- suppressWarnings(annotatePeakInBatch(gr[gcfqUniquePeaks],
+                                                           AnnotationData=annoData,
+                                                         output="nearestBiDirectionalPromoters",
+                                                         bindingRegion=c(-2000, 500)))
+goResgcfq <- getEnrichedGO(gcfqPeaksAnnotated, orgAnn="org.Hs.eg.db", maxP=.05, 
+                       minGOterm=10, multiAdjMethod="BH", condense=FALSE)
+goResGcfqUniq <- lapply(goResgcfq, function(tab){
+  tab2 <- unique(tab[,1:10])
+  tab2 <- tab2[order(tab2$pvalue, decreasing=FALSE),]
+  rownames(tab2) <- NULL
+  tab2
+  })
+
+head(goResGcfqUniq$bp)
+head(goResGcfqUniq$mf)
+head(goResGcfqUniq$cc)
+
+xtable::xtable(head(goResGcfqUniq$bp[,c(1:2,10)], n=20), digits=4)
+xtable::xtable(head(goResGcfqUniq$cc[,c(1:2,10)], n=20), digits=4)
+
+# fraction annotated
+length(gcfqPeaksAnnotated) / length(gcfqUniquePeaks)
+```
+
+
+#### Genomic feature plots
+
+```{r}
+# pdf("~/Dropbox/research/atacseq/bulk/plots/fullard_genomicFeatures.pdf", width=9)
+par(mfrow=c(3,1))
+barplot(peakFeaturesIst$percentage / peakFeaturesAll$percentage,
+        main="Intersection across normalization methods",
+        xlab="Genomic feature", ylab="Enrichment relative to all peaks") ; abline(h=1, lty=2, col="red", lwd=2)
+barplot(peakFeaturesGcfq$percentage / peakFeaturesAll$percentage,
+        main="GC-FQ and FQ-FQ but not FQ",
+        xlab="Genomic feature", ylab="Enrichment relative to all peaks") ; abline(h=1, lty=2, col="red", lwd=2)
+barplot(peakFeaturesCqn$percentage / peakFeaturesAll$percentage,
+        main="Peaks only found by cqn",
+        xlab="Genomic feature", ylab="Enrichment relative to all peaks") ; abline(h=1, lty=2, col="red", lwd=2)
+# dev.off()
+```
+
+
+
+
+
+
