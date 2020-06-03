@@ -1,0 +1,135 @@
+---
+title: "ATAC-seq normalization summary, polished"
+author: "Koen Van den Berge"
+date: "12/12/2019"
+output: html_document
+---
+
+This script only removes a few methods from the benchmark that are used for other purposes, e.g. robustness benchmarks. 
+
+```{r}
+getMeanScoreRank <- function(scores){
+  scoreT <- t(scores)
+  ranked_scores <- apply(scoreT,1,rank)
+  mean_score_rank <- rowMeans(ranked_scores)
+  mean_score_rank <- mean_score_rank[order(mean_score_rank, decreasing=TRUE)]
+  return(mean_score_rank)
+}
+
+rmMethods <- c("gcqn_mean", "gcqn_median_10", "gcqn_median_20",  "gcqn_median_100",
+               "gcqn_median_permuted")
+
+library(ggplot2)
+library(scone)
+filesDir <- "../../objects/"
+files <- list.files(filesDir,
+                    pattern = "*scores.rds$")
+datasets <- unlist(lapply(strsplit(files, split="_"),"[[",1))
+datasets[datasets %in% "geschwind2018"] <- "torre-ubieta2018"
+scores <- sapply(1:length(files), function(ii) readRDS(paste0(filesDir,files[ii])))
+# remove other methods
+scores <- lapply(scores, function(scoreMat){
+  scoreNames <- rownames(scoreMat)
+  rmID <- unlist(sapply(rmMethods, function(method){
+    grep(x=scoreNames, pattern=method)
+  }))
+  return(scoreMat[-rmID,])
+})
+
+```
+
+# Biplots
+
+```{r}
+getMethodNames <- function(pc_obj){
+  methodLabelsTmp <- strsplit(rownames(pc_obj$x), split=",")
+  methodNames <- unlist(lapply(methodLabelsTmp, function(x){
+    paste0(x[2:3], collapse=",")
+    #x[2]
+  }))
+  methods <- unlist(lapply(strsplit(methodNames, split=","), "[[", 1))
+  ruvs <- unlist(lapply(strsplit(methodNames, split=","), function(x) strsplit(x[2],split="_")))[seq(2,length(methodNames)*2, by=2)]
+  methodNames <- paste(methods,ruvs, sep = "_")
+  methodNames <- gsub(methodNames, pattern="gcqn_median_50", replacement="GC-FQ")
+  methodNames <- gsub(methodNames, pattern="edaseq", replacement="FQ-FQ")
+  methodNames <- gsub(methodNames, pattern="fq", replacement="FQ")
+  methodNames <- gsub(methodNames, pattern="tmm", replacement="TMM")
+  methodNames <- gsub(methodNames, pattern="deseq", replacement="DESeq")
+  return(methodNames)
+}
+
+pdf("~/Dropbox/research/atacseq/bulk/plots/benchmark_biplots.pdf")
+for(ii in 1:length(scores)){
+  scores1 <- scores[[ii]]
+  scores1 <- scores1[c(grep(x=rownames(scores1), pattern="no_uv"),
+                         grep(x=rownames(scores1), pattern="ruv_k=2")),]
+  pc_obj = prcomp(apply(t(scores1),1,rank),
+                  center = TRUE,scale = FALSE)
+  methodNames <- getMethodNames(pc_obj)
+  par(bty='l')
+  bp_obj = biplot_color(pc_obj,y = -rowMeans(apply(scores1,2,rank)),expand = .6,
+                        main=datasets[ii], xlim=c(-0.45, 0.4), cex=2)
+  text(x=bp_obj[,1], y=bp_obj[,2], labels=methodNames, cex=1.1)
+}
+dev.off()
+
+```
+
+
+
+```{r, eval=FALSE}
+makeBiplot <- function(scoreMat, main=NULL){
+  scoreMat <- scoreMat[c(grep(x=rownames(scoreMat), pattern="no_uv"),
+                         grep(x=rownames(scoreMat), pattern="ruv_k=2")),]
+  scoreT <- t(scoreMat)
+  ranked_scores <- apply(scoreT,1,rank)
+  mean_score_rank <- getMeanScoreRank(scoreMat)
+  pc_obj <- prcomp(ranked_scores,
+                center = TRUE,scale = FALSE)
+  methodLabelsTmp <- strsplit(rownames(pc_obj$x), split=",")
+  methodNames <- unlist(lapply(methodLabelsTmp, function(x){
+    paste0(x[2:3], collapse=",")
+    #x[2]
+  }))
+  methods <- unlist(lapply(strsplit(methodNames, split=","), "[[", 1))
+  ruvs <- unlist(lapply(strsplit(methodNames, split=","), function(x) strsplit(x[2],split="_")))[seq(2,length(methodNames)*2, by=2)]
+  methodNames <- paste(methods,ruvs, sep = "_")
+  methodNames <- gsub(methodNames, pattern="gcqn_median_50", replacement="gcqn")
+  
+  ppc <- t(t(pc_obj$x[,1:2])/pc_obj$sdev[1:2])
+  bp_obj <- biplot_color(pc_obj,y = -mean_score_rank,expand = .6, cex=2,
+       xlim=c(-1/2,1/2), ylim=c(-1/2,1/2), bty='l', main=main)
+  text(x=bp_obj[,1], y=bp_obj[,2], labels=methodNames, cex=1.1)
+}
+
+pdf("~/Dropbox/research/atacseq/bulk/plots/benchmark_biplots.pdf")
+for(ii in 1:length(scores)) makeBiplot(scores[[ii]], main=datasets[ii])
+dev.off()
+```
+
+
+# RUV vs no RUV
+
+```{r}
+pdf("~/Dropbox/research/atacseq/bulk/plots/benchmark_boxplots_ruv.pdf")
+for(ii in 1:length(scores)){
+  scoreMat <- scores[[ii]]
+  ruvLevels <- c("no_uv", paste0("ruv_k=",1:5))
+  scoreMat <- scoreMat[grep(x=rownames(scoreMat), pattern=paste(ruvLevels, collapse="|")),]
+  meanScores <- getMeanScoreRank(scoreMat)
+  idRUV <- vector(length=length(meanScores))
+  for(jj in 1:6){
+    idx <- grep(x=names(meanScores), pattern=ruvLevels[jj])
+    idRUV[idx] <- jj
+  }
+  
+  df <- data.frame(score=meanScores, ruv=idRUV)
+  par(bty='l', las=1)
+  boxplot(score ~ ruv, data=df, names=ruvLevels, ylab="Mean score rank", main=datasets[ii])
+}
+dev.off()
+
+```
+
+
+

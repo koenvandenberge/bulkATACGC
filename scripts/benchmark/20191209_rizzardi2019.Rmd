@@ -1,0 +1,128 @@
+---
+title: "Rizzardi normalization benchmark"
+author: "Koen Van den Berge"
+date: "12/9/2019"
+output: html_document
+---
+
+
+```{r}
+library(edgeR) ; library(cqn) ; library(GenomicAlignments)
+library(scone)
+library(qsmooth)
+library(rhdf5)
+
+data=read.delim("../../data/rizzardi2019_GSE96614/GSE96614_flow_sorted_brain.ATAC-seq_counts.txt.gz")
+
+# get GC content
+sn <- gsub(x=data[,1], pattern="chr", replacement="")
+start <- data[,2]
+end <- data[,3]
+gr <- GRanges(seqnames=sn, ranges=IRanges(start, end), strand="*")
+ff <- FaFile("~/data/genomes/human/Homo_sapiens.GRCh37.75.dna_sm.primary_assembly.fa")
+peakSeqs <- getSeq(x=ff, gr)
+gcContentPeaks <- letterFrequency(peakSeqs, "GC",as.prob=TRUE)[,1]
+gcGroups <- Hmisc::cut2(gcContentPeaks, g=20)
+counts <- as.matrix(data[,-c(1:3)])
+rownames(counts) <- 1:nrow(counts)
+
+# get metadata
+individual <- as.factor(substr(colnames(counts),2,5))
+region <- as.factor(unlist(lapply(strsplit(colnames(counts), split=".", fixed=TRUE), "[[", 2)))
+neuCell <- as.factor(unlist(lapply(strsplit(colnames(counts), split=".", fixed=TRUE), "[[", 3)))
+table(neuCell, region, individual)
+``` 
+
+
+# Evaluate normalization procedures
+
+```{r}
+bpparam <- BiocParallel::bpparam()
+bpparam$workers <- 1
+source("../../methods/scone_evaluation.R")
+hk <- readRDS("../../objects/hkListHumanGenomicRanges.rds")
+qh <- queryHits(findOverlaps(gr, hk, type="within"))
+negcon <- rownames(counts)[qh]
+length(negcon)
+bio <- interaction(region, neuCell)
+
+# batch effects: combination of sequencing, flow sorting and patient
+download.file(url="https://github.com/hansenlab/BrainEpigenomeNN/blob/master/ATAC-seq/objects/colData-flow-sorted-brain-atac-seq.rds?raw=true", destfile="~/tmp/colDataRizzardiAtac.rds")
+cd <- readRDS("~/tmp/colDataRizzardiAtac.rds")
+cd <- cd[-grep(x=rownames(cd), pattern="rep2"),]
+sequencingBatch <- stringr::str_extract(cd$R1, "HiSeq[0-9]+")
+flowBatch <- as.character(cd$FLOW_DATE)
+batch <- droplevels(interaction(flowBatch, sequencingBatch))
+batch <- droplevels(interaction(individual, batch))
+
+## QC measures
+download.file(url = "https://raw.githubusercontent.com/hansenlab/BrainEpigenomeNN/master/sequencing_summary_stats/tables/Summary_of_ATAC-seq.csv",
+              destfile = "~/tmp/rizzardi2019_qc.csv")
+qcData <- read.csv("~/tmp/rizzardi2019_qc.csv")
+rownames(qcData) <- paste0("X",
+                           gsub(x=qcData$ID, pattern="_", replacement=".", fixed=TRUE),
+                           ".rep1")
+rownames(qcData) <- gsub(x=rownames(qcData), pattern="NAcc", replacement="NA")
+qc <- qcData[colnames(counts),-1]
+
+
+gcContentScone <- gcContentPeaks
+gcGroupsScone <- gcGroups
+gcGroupsScone10 <- Hmisc::cut2(gcContentPeaks, g=10)
+gcGroupsScone50 <- Hmisc::cut2(gcContentPeaks, g=50)
+gcGroupsScone100 <- Hmisc::cut2(gcContentPeaks, g=100)
+h5File <- "/Users/koenvandenberge/tmp/normCounts_rizzardi2019.h5"
+sconeFit <- sconeEvaluation(counts=counts, bio=bio, negcon=negcon, qc=qc, batch=batch,
+                gcContent=gcContentPeaks, gcGroups=gcGroups, k_ruv=5,
+                k_qc=5, adjust_bio='no', eval_kclust = nlevels(bio),
+                diffLength=FALSE, bpparam=bpparam, return_norm="hdf5",
+                hdf5file=h5File)
+saveRDS(sconeFit, "~/Dropbox/research/atacseq/bulk/analysis/benchmarkNormalization/rizzardi2019_sconeFit.rds")
+
+## add GC-bias through RLE to scores
+rleGC_med <- rleGCh5(h5File = h5File, 
+                  gcContent = gcContentScone,
+                  type="med")
+rleGC_iqr <- rleGCh5(h5File = h5File, 
+                  gcContent = gcContentScone,
+                  type="iqr")
+scores <- get_scores(sconeFit)
+scores <- cbind(scores, 
+                rleGC_med = -rleGC_med[rownames(scores)],
+                rleGC_iqr = -rleGC_iqr[rownames(scores)])
+scoreT <- t(scores)
+ranked_scores <- apply(scoreT,1,rank)
+mean_score_rank <- rowMeans(ranked_scores)
+mean_score_rank <- mean_score_rank[order(mean_score_rank, decreasing=TRUE)]
+mean_score_rank
+
+```
+
+
+# Biplot
+
+```{r}
+pc_obj <- prcomp(apply(scoreT,1,rank),
+                center = TRUE,scale = FALSE)
+methodLabelsTmp <- strsplit(rownames(pc_obj$x), split=",")
+methodNames <- unlist(lapply(methodLabelsTmp, function(x){
+  paste0(x[2:3], collapse=",")
+}))
+methods <- unlist(lapply(strsplit(methodNames, split=","), "[[", 1))
+ruvs <- unlist(lapply(strsplit(methodNames, split=","), function(x) strsplit(x[2],split="_")))[seq(2,length(methodNames)*2, by=2)]
+methodNames <- paste(methods,ruvs, sep = "_")
+
+bp_obj <- biplot_color(pc_obj,y = -mean_score_rank,expand = .6, cex=2)
+text(x=bp_obj[,1], y=bp_obj[,2], labels=methodNames, cex=2/3)
+```
+
+
+
+```{r}
+file.remove(h5File)
+saveRDS(scores, file="~/Dropbox/research/atacseq/bulk/analysis/benchmarkNormalization/rizzardi2019_scores.rds")
+sessionInfo()
+```
+
+
+

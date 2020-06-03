@@ -1,0 +1,157 @@
+---
+title: "Fullard 2019 ATAC-seq human brain atlas normalizatoin benchmark"
+author: "Koen Van den Berge"
+date: "11/27/2019"
+output: html_document
+---
+
+
+```{r}
+library(GenomicAlignments)
+library(edgeR)
+library(UpSetR)
+library(rafalib)
+library(tidyverse)
+library(ggridges)
+library(tidyr)
+library(quantro)
+library(qsmooth)
+library(RUVSeq)
+library(scone)
+library(rhdf5)
+
+counts <- read.table("../../data/fullard2019/boca_raw_count_matrix.tsv", 
+                     header=TRUE, stringsAsFactors = FALSE)
+
+```
+
+```{r}
+peaks <- read.table("../../data/fullard2019/boca_peaks_consensus_no_blacklisted_regions.bed", header=FALSE, stringsAsFactors = FALSE)
+colnames(peaks) <- c("chromosome", "start", "end", "name")
+
+peakNames <- peaks$name
+sn <- substr(peaks$chromosome, 4, sapply(peaks$chromosome, nchar))
+start <- peaks$start
+end <- peaks$end
+gr <- GRanges(seqnames=sn, ranges = IRanges(start=start, end=end), strand="*")
+names(gr) <- peaks$name
+
+# get GC content
+ff <- FaFile("~/data/genomes/human/Homo_sapiens.GRCh37.75.dna_sm.primary_assembly.fa")
+peakSeqs <- getSeq(x=ff, gr)
+gcContentPeaks <- letterFrequency(peakSeqs, "GC",as.prob=TRUE)[,1]
+gcGroups <- Hmisc::cut2(gcContentPeaks, g=20)
+mcols(gr)$gc <- gcContentPeaks
+
+# design
+# the data should consist of 2 cell types (neurons and non-neurons) across 14 distinct brain regions of 5 individuals
+colnames(counts) <- gsub(x=colnames(counts),pattern="^X", replacement="")
+individual <- factor(unlist(lapply(strsplit(colnames(counts), split="_"), "[[", 1)))
+celltype <- factor(unlist(lapply(strsplit(colnames(counts), split="_"), "[[", 2)))
+region <- factor(unlist(lapply(strsplit(colnames(counts), split="_"), "[[", 3)))
+
+# metadata
+meta <- readr::read_delim("../../data/fullard2019/metadata_boca.csv", 
+                   delim="\t")
+table(meta$Sequence_date, meta$Flowcell)
+table(meta$Sequence_date, meta$Sort_date)
+
+```
+
+
+```{r}
+bpparam <- BiocParallel::bpparam()
+bpparam$workers <- 1
+
+source("../../methods/scone_evaluation.R")
+
+###  filter 
+keep <- rowSums(edgeR::cpm(counts) > 2) >=10
+counts <- counts[keep,]
+gcContentPeaks <- gcContentPeaks[keep]
+gcGroups <- gcGroups[keep]
+gr <- gr[keep]
+
+expr <- as.matrix(counts)
+bio <- droplevels(interaction(celltype, region))
+hk <- readRDS("../../objects/hkListHumanGenomicRanges.rds")
+# get peaks that are within hk
+qh <- queryHits(findOverlaps(gr, hk, type="within"))
+negcon <- rownames(counts)[qh]
+# the Sort_date inlcudes sequence_date so I'll consider this as batch
+# note that other batch effects may be present, e.g. PCR date.
+batch <- factor(meta$Sort_date) 
+qc <- data.frame(meta$Input_mg, meta$Total_PCR_cycles, meta$Gel_date)
+qc <- cbind(qc, meta[,52:ncol(meta)])
+# remove constant variables or variables about biology of the expt.
+qc <- qc[,!colnames(qc) %in% c("star_Insertion_rate_per_base", "star_Deletion_average_length", "picard_SECONDARY_OR_SUPPLEMENTARY_RDS", "picard_UNMAPPED_READS", "metaMergingDesigns", "lowReadCount", "cell_subtype", "readCountInfo_Unassigned_MultiMapping", "readCountInfo_Unassigned_Unmapped", "readCountInfo_Unassigned_MappingQuality", "readCountInfo_Unassigned_Chimera", "readCountInfo_Unassigned_Secondary")]
+qc2 <- apply(qc,2,as.numeric)
+# replace pctages with numerics
+pctVars <- grep(x=colnames(qc2), pattern="_pct")
+qcPct <- apply(qc[,pctVars], 2, function(var){
+  as.numeric(gsub(x=var, pattern = "%", replacement=""))
+})
+qc2[,pctVars] <- qcPct
+# remove others
+fctID <- which(apply(qc2,2,function(var) any(is.na(var))))
+qc2 <- qc2[,-fctID]
+
+
+
+gcContentScone <- gcContentPeaks
+gcGroupsScone <- gcGroups
+h5File <- "/Users/koenvandenberge/tmp/normCounts_fullard2019.h5"
+gcGroupsScone10 <- Hmisc::cut2(gcContentPeaks, g=10)
+gcGroupsScone50 <- Hmisc::cut2(gcContentPeaks, g=50)
+gcGroupsScone100 <- Hmisc::cut2(gcContentPeaks, g=100)
+sconeFit <- sconeEvaluation(counts=counts, bio=bio, batch=batch, qc=qc2,
+                            negcon=negcon, gcContent=gcContentPeaks, 
+                            gcGroups=gcGroups, k_ruv=5, k_qc=2, 
+                            adjust_bio='no', eval_kclust = nlevels(bio),
+                            diffLength=TRUE, bpparam=bpparam, return_norm="hdf5",
+                            hdf5file=h5File)
+
+## add GC-bias through RLE to scores
+rleGC_med <- rleGCh5(h5File = h5File, 
+                  gcContent = gcContentScone,
+                  type="med")
+rleGC_iqr <- rleGCh5(h5File = h5File, 
+                  gcContent = gcContentScone,
+                  type="iqr")
+scores <- get_scores(sconeFit)
+scores <- cbind(scores, 
+                rleGC_med = -rleGC_med[rownames(scores)],
+                rleGC_iqr = -rleGC_iqr[rownames(scores)])
+scoreT <- t(scores)
+ranked_scores <- apply(scoreT,1,rank)
+mean_score_rank <- rowMeans(ranked_scores)
+mean_score_rank <- mean_score_rank[order(mean_score_rank, decreasing=TRUE)]
+mean_score_rank
+
+```
+
+# Biplot
+
+```{r}
+pc_obj <- prcomp(apply(scoreT,1,rank),
+                center = TRUE,scale = FALSE)
+methodLabelsTmp <- strsplit(rownames(pc_obj$x), split=",")
+methodNames <- unlist(lapply(methodLabelsTmp, function(x){
+  paste0(x[2:3], collapse=",")
+}))
+methods <- unlist(lapply(strsplit(methodNames, split=","), "[[", 1))
+ruvs <- unlist(lapply(strsplit(methodNames, split=","), function(x) strsplit(x[2],split="_")))[seq(2,length(methodNames)*2, by=2)]
+methodNames <- paste(methods,ruvs, sep = "_")
+
+bp_obj <- biplot_color(pc_obj,y = -mean_score_rank,expand = .6, cex=2)
+text(x=bp_obj[,1], y=bp_obj[,2], labels=methodNames, cex=2/3)
+```
+
+
+
+```{r}
+file.remove(h5File)
+saveRDS(scores, file="~/Dropbox/research/atacseq/bulk/analysis/benchmarkNormalization/fullard2019_scores.rds")
+sessionInfo()
+```
+
