@@ -1,0 +1,471 @@
+---
+title: "figure 1 and 2"
+author: "Koen Van den Berge"
+date: "2/26/2020"
+output: html_document
+---
+
+```{r}
+library(GenomicAlignments)
+library(tidyverse)
+library(cqn)
+library(RColorBrewer)
+library(edgeR)
+library(ggplot2)
+library(cowplot)
+library(ggridges)
+library(gridExtra)
+colsBig <- clusterExperiment:::massivePalette
+plotGCHex <- function(gr, counts){
+  counts2 <- counts
+  df <- as_tibble(cbind(counts2,gc=mcols(gr)$gc))
+  df <- gather(df, sample, value, -gc)
+  ggplot(data=df, aes(x=gc, y=log(value+1)) ) + 
+    ylab("log(count + 1)") + xlab("GC-content") + 
+    geom_hex(bins = 50) + theme_bw() #+ facet_wrap(~sample, nrow=2)
+}
+pal <- RColorBrewer::brewer.pal(n=8, "Dark2")
+source("../../methods/gcqn_validated.R")
+
+### this dataset combines samples from a number of different sources, therefore the GC effects are wildly different between samples.
+data=read.delim("../../data/calderon2019_GSE118189/GSE118189_ATAC_counts.txt.gz")
+colnames(data) <- substr(colnames(data),2,nchar(colnames(data)))
+
+# get GC content
+rn <- rownames(data)
+sn <- unlist(lapply(lapply(strsplit(rn,split="_"),"[",1),function(x) gsub(pattern="chr",x=x,replacement="")))
+start <- as.numeric(unlist(lapply(strsplit(rn,split="_"),"[",2)))
+end <- as.numeric(unlist(lapply(strsplit(rn,split="_"),"[",3)))
+gr <- GRanges(seqnames=sn, ranges=IRanges(start, end), strand="*", mcols=data.frame(peakID=rn))
+ff <- FaFile("~/data/genomes/human/Homo_sapiens.GRCh37.75.dna_sm.primary_assembly.fa")
+peakSeqs <- getSeq(x=ff, gr)
+gcContentPeaks <- letterFrequency(peakSeqs, "GC",as.prob=TRUE)[,1]
+gcGroups <- Hmisc::cut2(gcContentPeaks, g=20)
+mcols(gr)$gc <- gcContentPeaks
+
+# get metadata
+cnames <- colnames(data)
+donor <- unlist(lapply(strsplit(cnames,split=".",fixed=TRUE),"[",1))
+celltype <- factor(unlist(lapply(strsplit(cnames,split=".",fixed=TRUE),"[",2)))
+condition <- unlist(lapply(strsplit(cnames,split=".",fixed=TRUE),"[",3))
+table(celltype,condition)
+
+# QC measures
+qcMeasures <- openxlsx::read.xlsx(xlsxFile = "../../data/calderon2019_GSE118189/Supplementary_tables.xlsx",
+                    sheet = 5)
+qcMeasures <- qcMeasures[,1:4]
+qcMeasures$sample <- gsub(x=qcMeasures$sample, pattern="-", replacement=".", fixed=TRUE)
+rownames(qcMeasures) <- qcMeasures$sample
+qcMeasures <- qcMeasures[colnames(data),]
+
+# batch
+addSamples <- read.table("../../data/calderon2019_GSE118189/samples_with_additional_resequencing.txt",
+                         stringsAsFactors = FALSE)[,1]
+addSamples <- gsub(x=addSamples, pattern="-", replacement=".", fixed=TRUE)
+batch2 <- rep(0, ncol(data))
+names(batch2) <- colnames(data)
+batch2[addSamples]<- 1
+batch2 <- factor(batch2)
+batch <- droplevels(interaction(donor, batch2))
+
+table(celltype,condition, batch)
+counts <- as.matrix(data) ; rm(data) ; gc()
+```
+
+
+# Lowess fits
+
+## GC content
+
+```{r}
+
+lowListGC <- list()
+for(kk in 1:ncol(counts)){
+  set.seed(kk)
+  lowListGC[[kk]] <- lowess(x=gcContentPeaks, y=log1p(counts[,kk]), f=1/10)
+}
+
+
+for(cc in 1:nlevels(celltype)){
+  curCT <- levels(celltype)[cc]
+  id <- which(celltype == curCT)
+  curBatch <- batch[id]
+  plot(x=seq(min(gcContentPeaks), max(gcContentPeaks), length=10),
+     y=seq(0, 4, length=10), type='n',
+     xlab="GC-content", ylab="Log(count + 1)", main=curCT)
+  for(ii in 1:length(id)){
+    curID <- id[ii]
+    oo <- order(lowListGC[[curID]]$x)
+    lines(x=lowListGC[[curID]]$x[oo], y=lowListGC[[curID]]$y[oo], col=colsBig[batch[curID]])
+  }
+}
+
+for(bb in 1:nlevels(batch)){
+  curB <- levels(batch)[bb]
+  id <- which(batch == curB)
+  plot(x=seq(min(gcContentPeaks), max(gcContentPeaks), length=10),
+     y=seq(0, 4, length=10), type='n',
+     xlab="GC-content", ylab="Log(count + 1)", main=curB)
+  for(ii in 1:length(id)){
+    curID <- id[ii]
+    oo <- order(lowListGC[[curID]]$x)
+    lines(x=lowListGC[[curID]]$x[oo], y=lowListGC[[curID]]$y[oo], col=colsBig[batch[curID]])
+  }
+}
+```
+
+
+# Visualization
+
+```{r}
+lowMemNK <- lowListGC[celltype == "Memory_NK"]
+dfList <- list()
+for(ss in 1:length(lowMemNK)){
+  oox <- order(lowMemNK[[ss]]$x)
+  dfList[[ss]] <- data.frame(x=lowMemNK[[ss]]$x[oox], y=lowMemNK[[ss]]$y[oox], sample=ss)
+}
+dfAll <- do.call(rbind, dfList)
+dfAll$sample <- factor(dfAll$sample)
+
+## association of GC content with counts
+plotGCHex(gr, rowMeans(counts[, celltype == "Memory_NK"])) +
+  theme(axis.title = element_text(size=16)) +
+  labs(fill="Nr. of peaks") + 
+  geom_line(aes(x=x, y=y, group=sample, color=sample), data=dfAll, size=1) +
+  scale_color_discrete()
+
+## just the average GC content
+p1 <- ggplot(dfAll, aes(x=x, y=y, group=sample, color=sample)) +
+  geom_line(size = 1) +
+  xlab("GC-content") +
+  ylab("Log(count + 1)") +
+  theme_classic()
+#  rm(lowListGC) ; gc()
+
+
+# across all cell types
+set.seed(44)
+pList <- c()
+id <- sample(nrow(counts), size=1e4)
+for(cc in 1:nlevels(celltype)){
+  curCT <- levels(celltype)[cc]
+  lowCT <- lowListGC[celltype == curCT]
+  dfList <- list()
+  for(ss in 1:length(lowCT)){
+  oox <- order(lowCT[[ss]]$x[id])
+  dfList[[ss]] <- data.frame(x=lowCT[[ss]]$x[id][oox], y=lowCT[[ss]]$y[id][oox], sample=ss)
+  }
+  dfAll <- do.call(rbind, dfList)
+  dfAll$sample <- factor(dfAll$sample)
+  pCT <- ggplot(dfAll, aes(x=x, y=y, group=sample, color=sample)) +
+    geom_line(size = 1) +
+    xlab("GC-content") +
+    ylab("Log(count + 1)") +
+    theme_classic() +
+    ggtitle(curCT) +
+    theme(legend.position = "none") +
+    ylim(c(0, 3.5))
+  pList[[cc]] <- pCT
+}
+
+cowplot::plot_grid(plotlist=pList, nrow=5, ncol=5)
+
+ggsave("~/Dropbox/research/atacseq/bulk/plots/gcEffectsAllCells.pdf",
+       units="in", width=12, height=9)
+ggsave("~/Dropbox/research/atacseq/bulk/plots/gcEffectsAllCells.png",
+       units="in", width=12, height=9)
+
+rm(lowListGC, lowCT, pList) ; gc()
+```
+
+## Peak width
+
+```{r}
+lowListWidth <- list()
+for(kk in 1:ncol(counts)){
+  lowListWidth[[kk]] <- lowess(x=log(width(gr)), y=log1p(counts[,kk]), f=1/10)
+}
+
+plot(x=seq(min(log(width(gr))), max(log(width(gr))), length=10),
+     y=seq(0, 5, length=10), type='n',
+     xlab="GC-content", ylab="Log(count + 1)")
+for(kk in 1:length(lowListWidth)){
+  oo <- order(lowListWidth[[kk]]$x)
+  lines(x=lowListWidth[[kk]]$x[oo], y=lowListWidth[[kk]]$y[oo], col=colsBig[kk])
+}
+
+# across all cell types
+set.seed(44)
+pList <- c()
+id <- sample(nrow(counts), size=1e4)
+for(cc in 1:nlevels(celltype)){
+  curCT <- levels(celltype)[cc]
+  lowCT <- lowListWidth[celltype == curCT]
+  dfList <- list()
+  for(ss in 1:length(lowCT)){
+  oox <- order(lowCT[[ss]]$x[id])
+  dfList[[ss]] <- data.frame(x=lowCT[[ss]]$x[id][oox], y=lowCT[[ss]]$y[id][oox], sample=ss)
+  }
+  dfAll <- do.call(rbind, dfList)
+  dfAll$sample <- factor(dfAll$sample)
+  pCT <- ggplot(dfAll, aes(x=x, y=y, group=sample, color=sample)) +
+    geom_line(size = 1) +
+    xlab("Log peak width") +
+    ylab("Log(count + 1)") +
+    theme_classic() +
+    ggtitle(curCT) +
+    theme(legend.position = "none") +
+    ylim(c(0, 4.5))
+  pList[[cc]] <- pCT
+}
+
+cowplot::plot_grid(plotlist=pList, nrow=5, ncol=5)
+
+ggsave("~/Dropbox/research/atacseq/bulk/plots/widthEffectsAllCells.pdf",
+       units="in", width=12, height=9)
+ggsave("~/Dropbox/research/atacseq/bulk/plots/widthEffectsAllCells.png",
+       units="in", width=12, height=9)
+
+rm(lowListWidth) ; gc()
+```
+
+
+
+
+# Mock comparisons
+
+```{r}
+# Memory_NK cells
+memContID <- celltype == "Memory_NK" & condition == "U"
+countsMemControl <- counts[,memContID]
+keepMemContr <- rowSums(cpm(countsMemControl) >= 2) >=3 
+countsMemControl <- countsMemControl[keepMemContr, ]
+# these are all from different batches.
+table(droplevels(batch[memContID]))
+# equally sized bins after filtering
+gcGroupsMem <- Hmisc::cut2(gcContentPeaks[keepMemContr], g=20)
+gcMem <- gcContentPeaks[keepMemContr]
+
+set.seed(33)
+mock <- factor(sample(rep(letters[1:2], each=3)))
+design <- model.matrix(~mock)
+```
+
+## edgeR (TMM normalization)
+
+```{r}
+## TMM normalization
+library(edgeR)
+d <- DGEList(countsMemControl)
+d <- calcNormFactors(d)
+d <- estimateDisp(d, design)
+fit <- glmFit(d, design)
+lrt <- glmLRT(fit, coef=2) 
+dfEdgeR <- data.frame(logFC=log(2^lrt$table$logFC),
+                 gc=gcGroupsMem)
+pedgeR <- ggplot(dfEdgeR) +
+  aes(x=gc, y=logFC, color=gc) +
+  geom_violin() +
+  geom_boxplot(width=0.1) +
+  scale_color_manual(values=wesanderson::wes_palette("Zissou1", nlevels(gcGroups), "continuous")) +
+  geom_abline(intercept = 0, slope = 0, col="black", lty=2) +
+  theme_bw() + 
+  ylim(c(-1,1)) +
+  ggtitle("TMM normalization") +
+  xlab("GC-content bin") +
+  theme(axis.text.x = element_text(angle = 45, vjust = .5),
+        legend.position = "none",
+        axis.title = element_text(size=16))
+pedgeR
+```
+
+## DESeq2 (MOR normalization)
+
+```{r}
+## DESeq2 normalization
+library(DESeq2)
+dds <- DESeqDataSetFromMatrix(countsMemControl, 
+                       colData=data.frame(mock=mock), 
+                       design=~mock)
+dds <- DESeq(dds)
+res <- results(dds, name="mock_b_vs_a")
+dfDESeq2 <- data.frame(logFC=log(2^res$log2FoldChange),
+                       gc=gcGroupsMem)
+pdeseq <- ggplot(dfDESeq2) +
+  aes(x=gc, y=logFC, color=gc) +
+  geom_violin() +
+  geom_boxplot(width=0.1) +
+  scale_color_manual(values=wesanderson::wes_palette("Zissou1", nlevels(gcGroups), "continuous")) +
+  geom_abline(intercept = 0, slope = 0, col="black", lty=2) +
+  theme_bw() + 
+  ylim(c(-1,1)) +
+  ggtitle("DESeq2 MOR normalization") +
+  xlab("GC-content bin") +
+  theme(axis.text.x = element_text(angle = 45, vjust = .5),
+        legend.position = "none",
+        axis.title = element_text(size=16))
+pdeseq
+```
+
+## Full quantile
+
+```{r}
+## Full quantile normalization
+countsFQ <- FQnorm(countsMemControl, type="median")
+d <- DGEList(countsFQ)
+d <- estimateDisp(d, design)
+fit <- glmFit(d, design)
+lrtFQ <- glmLRT(fit, coef=2) 
+dfFQ <- data.frame(logFC=log(2^lrtFQ$table$logFC),
+                      gc=gcGroupsMem)
+pFQ <- ggplot(dfFQ) +
+  aes(x=gc, y=logFC, color=gc) +
+  geom_violin() +
+  geom_boxplot(width=0.1) +
+  scale_color_manual(values=wesanderson::wes_palette("Zissou1", nlevels(gcGroups), "continuous")) +
+  geom_abline(intercept = 0, slope = 0, col="black", lty=2) +
+  theme_bw() + 
+  ylim(c(-1,1)) +
+  ggtitle("FQ normalization") +
+  xlab("GC-content bin") +
+  theme(axis.text.x = element_text(angle = 45, vjust = .5),
+        legend.position = "none",
+        axis.title = element_text(size=16))
+pFQ
+```
+
+
+# Composite plot for figure 1
+
+```{r}
+p <- plot_grid(p1 + ggtitle("Memory NK cells"), pedgeR, 
+               pdeseq, pFQ,
+               labels=letters[1:4])
+p
+ggsave("~/Dropbox/research/atacseq/bulk/plots/figure1.png",
+       units="in", width=12, height=9)
+```
+
+
+
+
+
+# Figure 2
+
+```{r}
+
+##### FIGURE 2
+## cqn
+cqnModel <- cqn(countsMemControl, x=gcMem, sizeFactors = colSums(countsMemControl),
+                lengths=width(gr)[keepMemContr])
+d <- DGEList(countsMemControl)
+d$offset <- cqnModel$glm.offset
+d <- estimateDisp(d, design)
+fit <- glmFit(d, design)
+lrtCqn <- glmLRT(fit, coef=2)
+dfCqn <- data.frame(logFC=log(2^lrtCqn$table$logFC),
+                   gc=gcGroupsMem)
+pCqn <- ggplot(dfCqn) +
+  aes(x=gc, y=logFC, color=gc) +
+  geom_violin() +
+  geom_boxplot(width=0.1) +
+  scale_color_manual(values=wesanderson::wes_palette("Zissou1", nlevels(gcGroups), "continuous")) +
+  geom_abline(intercept = 0, slope = 0, col="black", lty=2) +
+  theme_bw() + 
+  ylim(c(-1,1)) +
+  xlab("GC-content bin") +
+  ggtitle("cqn normalization") +
+  theme(axis.text.x = element_text(angle = 45, vjust = .5),
+        legend.position = "none",
+        axis.title = element_text(size=16))
+
+# ## EDASeq
+library(EDASeq)
+#emptyRows <- which(rownames(countsMouse) == "")
+#rownames(countsMouse)[emptyRows] <- paste0("emptyPeak",1:length(emptyRows))
+dataWithin <- withinLaneNormalization(countsMemControl, y=gcMem,
+                                      num.bins=20, which="full")
+dataNorm <- betweenLaneNormalization(dataWithin, which="full")
+d <- DGEList(dataNorm)
+d <- estimateDisp(d, design)
+fit <- glmFit(d, design)
+lrtEDASeq <- glmLRT(fit, coef=2)
+dfEDASeq <- data.frame(logFC=log(2^lrtEDASeq$table$logFC),
+                    gc=gcGroupsMem)
+pEDASeq <- ggplot(dfEDASeq) +
+  aes(x=gc, y=logFC, color=gc) +
+  geom_violin() +
+  geom_boxplot(width=0.1) +
+  scale_color_manual(values=wesanderson::wes_palette("Zissou1", nlevels(gcGroups), "continuous")) +
+  geom_abline(intercept = 0, slope = 0, col="black", lty=2) +
+  theme_bw() +
+  ylim(c(-1,1)) +
+  xlab("GC-content bin") +
+  ggtitle("FQ-FQ normalization") +
+  theme(axis.text.x = element_text(angle = 45, vjust = .5),
+        legend.position = "none",
+        axis.title = element_text(size=16))
+
+
+## GC-QN
+countsGCQN <- gcqn(countsMemControl, gcGroupsMem, summary = "median")
+d <- DGEList(countsGCQN)
+d <- estimateDisp(d, design)
+fit <- glmFit(d, design)
+lrtGCQN <- glmLRT(fit, coef=2)
+dfGCQN <- data.frame(logFC=log(2^lrtGCQN$table$logFC),
+                   gc=gcGroupsMem)
+pGCQN <- ggplot(dfGCQN) +
+  aes(x=gc, y=logFC, color=gc) +
+  geom_violin() +
+  geom_boxplot(width=0.1) +
+  scale_color_manual(values=wesanderson::wes_palette("Zissou1", nlevels(gcGroups), "continuous")) +
+  geom_abline(intercept = 0, slope = 0, col="black", lty=2) +
+  theme_bw() + 
+  ylim(c(-1,1)) +
+  xlab("GC-content bin") +
+  ggtitle("GC-FQ normalization") +
+  theme(axis.text.x = element_text(angle = 45, vjust = .5),
+        legend.position = "none",
+        axis.title = element_text(size=16))
+
+## ridges plot before normalization
+countsN <- countsMemControl[,order(colSums(countsMemControl), decreasing=TRUE)[1:3]]
+
+for(ii in 1:ncol(countsN)){
+  lc <- log1p(countsN[,ii])
+  joyDat <- data.frame(lc=lc, gc=gcGroupsMem)
+  xLab <- base::ifelse(ii==2, "Log(count + 1)"," ")
+  yLab <- base::ifelse(ii==1, "GC-content bin"," ")
+  # axText <- ifelse(ii==1, 14, 0)
+  axText <- 0
+  ridgeHlp <- joyDat %>% ggplot(aes(y=gc)) + 
+    geom_density_ridges(aes(x=lc)) + 
+    theme_ridges(grid=FALSE, font_size=5, center_axis_labels = TRUE) + 
+    xlim(c(0.5,7)) +
+    xlab(xLab) +
+    ylab(yLab) +
+    theme(axis.text.y = element_text(size=axText),
+          axis.text.x = element_text(size=10),
+          legend.position = "none",
+          axis.title = element_text(size=16))
+  assign(paste0("ridge",ii), ridgeHlp)
+}
+pRidge1 <- grid.arrange(ridge1,ridge2,ridge3, nrow=1)
+
+
+pFC <- cowplot::plot_grid(pCqn, pEDASeq, pGCQN,
+                          labels=letters[2:4],
+                          nrow=3, ncol=1)
+
+pFig2 <- cowplot::plot_grid(pRidge1, 
+                   pFC,
+                   labels=c("a",""))
+pFig2
+ggsave("~/Dropbox/research/atacseq/bulk/plots/figure2.png",
+       units="in", width=12, height=9)
+
+```
+
+
+

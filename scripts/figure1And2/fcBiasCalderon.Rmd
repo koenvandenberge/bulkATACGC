@@ -1,0 +1,273 @@
+---
+title: "figure 1 and 2"
+author: "Koen Van den Berge"
+date: "2/26/2020"
+output: html_document
+---
+
+```{r}
+library(GenomicAlignments)
+library(tidyverse)
+library(cqn)
+library(RColorBrewer)
+library(edgeR)
+library(ggplot2)
+library(cowplot)
+library(ggridges)
+library(gridExtra)
+colsBig <- clusterExperiment:::massivePalette
+plotGCHex <- function(gr, counts){
+  counts2 <- counts
+  df <- as_tibble(cbind(counts2,gc=mcols(gr)$gc))
+  df <- gather(df, sample, value, -gc)
+  ggplot(data=df, aes(x=gc, y=log(value+1)) ) + 
+    ylab("log(count + 1)") + xlab("GC-content") + 
+    geom_hex(bins = 50) + theme_bw() #+ facet_wrap(~sample, nrow=2)
+}
+pal <- RColorBrewer::brewer.pal(n=8, "Dark2")
+source("../../methods/gcqn_validated.R")
+
+### this dataset combines samples from a number of different sources, therefore the GC effects are wildly different between samples.
+data=read.delim("../../data/calderon2019_GSE118189/GSE118189_ATAC_counts.txt.gz")
+colnames(data) <- substr(colnames(data),2,nchar(colnames(data)))
+
+# get GC content
+rn <- rownames(data)
+sn <- unlist(lapply(lapply(strsplit(rn,split="_"),"[",1),function(x) gsub(pattern="chr",x=x,replacement="")))
+start <- as.numeric(unlist(lapply(strsplit(rn,split="_"),"[",2)))
+end <- as.numeric(unlist(lapply(strsplit(rn,split="_"),"[",3)))
+gr <- GRanges(seqnames=sn, ranges=IRanges(start, end), strand="*", mcols=data.frame(peakID=rn))
+ff <- FaFile("~/data/genomes/human/Homo_sapiens.GRCh37.75.dna_sm.primary_assembly.fa")
+peakSeqs <- getSeq(x=ff, gr)
+gcContentPeaks <- letterFrequency(peakSeqs, "GC",as.prob=TRUE)[,1]
+gcGroups <- Hmisc::cut2(gcContentPeaks, g=20)
+mcols(gr)$gc <- gcContentPeaks
+
+# get metadata
+cnames <- colnames(data)
+donor <- unlist(lapply(strsplit(cnames,split=".",fixed=TRUE),"[",1))
+celltype <- factor(unlist(lapply(strsplit(cnames,split=".",fixed=TRUE),"[",2)))
+condition <- unlist(lapply(strsplit(cnames,split=".",fixed=TRUE),"[",3))
+table(celltype,condition)
+
+# QC measures
+qcMeasures <- openxlsx::read.xlsx(xlsxFile = "../../data/calderon2019_GSE118189/Supplementary_tables.xlsx",
+                    sheet = 5)
+qcMeasures <- qcMeasures[,1:4]
+qcMeasures$sample <- gsub(x=qcMeasures$sample, pattern="-", replacement=".", fixed=TRUE)
+rownames(qcMeasures) <- qcMeasures$sample
+qcMeasures <- qcMeasures[colnames(data),]
+
+# batch
+addSamples <- read.table("../../data/calderon2019_GSE118189/samples_with_additional_resequencing.txt",
+                         stringsAsFactors = FALSE)[,1]
+addSamples <- gsub(x=addSamples, pattern="-", replacement=".", fixed=TRUE)
+batch2 <- rep(0, ncol(data))
+names(batch2) <- colnames(data)
+batch2[addSamples]<- 1
+batch2 <- factor(batch2)
+batch <- droplevels(interaction(donor, batch2))
+
+table(celltype,condition, batch)
+counts <- as.matrix(data) ; rm(data) ; gc()
+```
+
+# Mock comparisons
+
+```{r}
+exploreFCBias <- function(curCounts, gcContentPeaks){
+  keep <- rowSums(cpm(curCounts) >= 2) >=3 
+  curCounts <- curCounts[keep, ]
+  # equally sized bins after filtering
+  gcGroups <- Hmisc::cut2(gcContentPeaks[keep], g=20)
+  gcCur <- gcContentPeaks[keep]
+  
+  set.seed(33)
+  mock <- factor(sample(rep(letters[1:2], each=3)))
+  design <- model.matrix(~mock)
+  
+  ## edgeR
+  ## TMM normalization
+  library(edgeR)
+  d <- DGEList(curCounts)
+  d <- calcNormFactors(d)
+  d <- estimateDisp(d, design)
+  fit <- glmFit(d, design)
+  lrt <- glmLRT(fit, coef=2) 
+  dfEdgeR <- data.frame(logFC=log(2^lrt$table$logFC),
+                   gc=gcGroups)
+  pedgeR <- ggplot(dfEdgeR) +
+    aes(x=gc, y=logFC, color=gc) +
+    geom_violin() +
+    geom_boxplot(width=0.1) +
+    scale_color_manual(values=wesanderson::wes_palette("Zissou1", nlevels(gcGroups), "continuous")) +
+    geom_abline(intercept = 0, slope = 0, col="black", lty=2) +
+    theme_bw() + 
+    ylim(c(-1,1)) +
+    ggtitle("TMM normalization") +
+    xlab("GC-content bin") +
+    theme(axis.text.x = element_text(angle = 45, vjust = .5),
+          legend.position = "none",
+          axis.title = element_text(size=16))
+  pedgeR
+  
+  ## DESeq2 normalization
+  library(DESeq2)
+  dds <- DESeqDataSetFromMatrix(curCounts, 
+                         colData=data.frame(mock=mock), 
+                         design=~mock)
+  dds <- DESeq(dds)
+  res <- results(dds, name="mock_b_vs_a")
+  dfDESeq2 <- data.frame(logFC=log(2^res$log2FoldChange),
+                         gc=gcGroups)
+  pdeseq <- ggplot(dfDESeq2) +
+    aes(x=gc, y=logFC, color=gc) +
+    geom_violin() +
+    geom_boxplot(width=0.1) +
+    scale_color_manual(values=wesanderson::wes_palette("Zissou1", nlevels(gcGroups), "continuous")) +
+    geom_abline(intercept = 0, slope = 0, col="black", lty=2) +
+    theme_bw() + 
+    ylim(c(-1,1)) +
+    ggtitle("DESeq2 MOR normalization") +
+    xlab("GC-content bin") +
+    theme(axis.text.x = element_text(angle = 45, vjust = .5),
+          legend.position = "none",
+          axis.title = element_text(size=16))
+  pdeseq
+  
+  ## Full quantile normalization
+  countsFQ <- FQnorm(curCounts, type="median")
+  d <- DGEList(countsFQ)
+  d <- estimateDisp(d, design)
+  fit <- glmFit(d, design)
+  lrtFQ <- glmLRT(fit, coef=2) 
+  dfFQ <- data.frame(logFC=log(2^lrtFQ$table$logFC),
+                        gc=gcGroups)
+  pFQ <- ggplot(dfFQ) +
+    aes(x=gc, y=logFC, color=gc) +
+    geom_violin() +
+    geom_boxplot(width=0.1) +
+    scale_color_manual(values=wesanderson::wes_palette("Zissou1", nlevels(gcGroups), "continuous")) +
+    geom_abline(intercept = 0, slope = 0, col="black", lty=2) +
+    theme_bw() + 
+    ylim(c(-1,1)) +
+    ggtitle("FQ normalization") +
+    xlab("GC-content bin") +
+    theme(axis.text.x = element_text(angle = 45, vjust = .5),
+          legend.position = "none",
+          axis.title = element_text(size=16))
+  pFQ
+  
+  p1 <- cowplot::plot_grid(pedgeR, pdeseq, pFQ, nrow=1, ncol=3)
+  p1
+  
+  
+  ## cqn
+  cqnModel <- cqn(curCounts, x=gcCur, sizeFactors = colSums(curCounts),
+                  lengths=width(gr)[keep])
+  d <- DGEList(curCounts)
+  d$offset <- cqnModel$glm.offset
+  d <- estimateDisp(d, design)
+  fit <- glmFit(d, design)
+  lrtCqn <- glmLRT(fit, coef=2)
+  dfCqn <- data.frame(logFC=log(2^lrtCqn$table$logFC),
+                     gc=gcGroups)
+  pCqn <- ggplot(dfCqn) +
+    aes(x=gc, y=logFC, color=gc) +
+    geom_violin() +
+    geom_boxplot(width=0.1) +
+    scale_color_manual(values=wesanderson::wes_palette("Zissou1", nlevels(gcGroups), "continuous")) +
+    geom_abline(intercept = 0, slope = 0, col="black", lty=2) +
+    theme_bw() + 
+    ylim(c(-1,1)) +
+    xlab("GC-content bin") +
+    ggtitle("cqn normalization") +
+    theme(axis.text.x = element_text(angle = 45, vjust = .5),
+          legend.position = "none",
+          axis.title = element_text(size=16))
+  
+  # ## EDASeq
+  library(EDASeq)
+  dataWithin <- withinLaneNormalization(curCounts, y=gcCur,
+                                        num.bins=20, which="full")
+  dataNorm <- betweenLaneNormalization(dataWithin, which="full")
+  d <- DGEList(dataNorm)
+  d <- estimateDisp(d, design)
+  fit <- glmFit(d, design)
+  lrtEDASeq <- glmLRT(fit, coef=2)
+  dfEDASeq <- data.frame(logFC=log(2^lrtEDASeq$table$logFC),
+                      gc=gcGroups)
+  pEDASeq <- ggplot(dfEDASeq) +
+    aes(x=gc, y=logFC, color=gc) +
+    geom_violin() +
+    geom_boxplot(width=0.1) +
+    scale_color_manual(values=wesanderson::wes_palette("Zissou1", nlevels(gcGroups), "continuous")) +
+    geom_abline(intercept = 0, slope = 0, col="black", lty=2) +
+    theme_bw() +
+    ylim(c(-1,1)) +
+    xlab("GC-content bin") +
+    ggtitle("FQ-FQ normalization") +
+    theme(axis.text.x = element_text(angle = 45, vjust = .5),
+          legend.position = "none",
+          axis.title = element_text(size=16))
+  
+  
+  ## GC-QN
+  countsGCQN <- gcqn(curCounts, gcGroups, summary = "median")
+  d <- DGEList(countsGCQN)
+  d <- estimateDisp(d, design)
+  fit <- glmFit(d, design)
+  lrtGCQN <- glmLRT(fit, coef=2)
+  dfGCQN <- data.frame(logFC=log(2^lrtGCQN$table$logFC),
+                     gc=gcGroups)
+  pGCQN <- ggplot(dfGCQN) +
+    aes(x=gc, y=logFC, color=gc) +
+    geom_violin() +
+    geom_boxplot(width=0.1) +
+    scale_color_manual(values=wesanderson::wes_palette("Zissou1", nlevels(gcGroups), "continuous")) +
+    geom_abline(intercept = 0, slope = 0, col="black", lty=2) +
+    theme_bw() + 
+    ylim(c(-1,1)) +
+    xlab("GC-content bin") +
+    ggtitle("GC-FQ normalization") +
+    theme(axis.text.x = element_text(angle = 45, vjust = .5),
+          legend.position = "none",
+          axis.title = element_text(size=16))
+  
+  p2 <- cowplot::plot_grid(pCqn, pEDASeq, pGCQN, nrow=1, ncol=3)
+  p2
+  
+  return(list(p1, p2))
+}
+```
+
+
+
+## Mature_NK cells
+
+```{r}
+# Mature_NK cells
+matID <- celltype == "Mature_NK" & condition == "S"
+countsMat <- counts[,matID]
+
+pMNK <- exploreFCBias(countsMat, gcContentPeaks)
+cowplot::plot_grid(plotlist=pMNK, nrow=2)
+ggsave("~/Dropbox/research/atacseq/bulk/plots/fcBiasMNK_calderon.pdf", width=10, height=8)
+```
+
+
+## Monocytes
+
+
+```{r}
+table(condition, celltype)
+
+# Monocytes
+monID <- celltype == "Monocytes" & condition == "S"
+countsMon <- counts[,monID]
+
+pMon <- exploreFCBias(countsMon, gcContentPeaks)
+cowplot::plot_grid(plotlist=pMon, nrow=2)
+ggsave("~/Dropbox/research/atacseq/bulk/plots/fcBiasMon_calderon.pdf", width=10, height=8)
+```
+
