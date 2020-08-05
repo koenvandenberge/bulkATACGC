@@ -71,6 +71,10 @@ Here we stratify performances based on the number of estimated unwanted variatio
 
 Since different methods have different domains in terms of the ranking, we scale the ranks within each dataset before taking the average.
 
+```{r}
+gcNormMethods <- c("FQ-FQ", "GC-FQ", "cqn_length", "cqn", "GC-FQ_smooth")
+```
+
 
 ## No latent variables
 
@@ -105,7 +109,9 @@ ggplot(scoreDfOrdered0, aes(y=methodShort, x=dataset, fill=scaledRank)) +
   ggtitle("Without RUV variables") +
   ylab("") + xlab("Dataset") +
   theme(axis.text.x = element_text(angle = 30, vjust= 0.7, size=9),
-        axis.text.y = element_text(size=9))
+        axis.text.y = element_text(size=9)) + 
+  theme(panel.background = element_rect(fill="white")) + 
+  theme(axis.text.y=element_text(colour=ifelse(orderedMethodShort0 %in% gcNormMethods, "dodgerblue", "black")))
 ggsave("~/Dropbox/research/atacseq/bulk/plots/benchmark_noRUV_noGCRLE.pdf")
 ```
 
@@ -141,7 +147,9 @@ ggplot(scoreDfOrdered1, aes(y=methodShort, x=dataset, fill=scaledRank)) +
   ggtitle("One RUV variable") +
   ylab("") + xlab("Dataset") +
   theme(axis.text.x = element_text(angle = 30, vjust= 0.7, size=9),
-        axis.text.y = element_text(size=9))
+        axis.text.y = element_text(size=9))  + 
+  theme(panel.background = element_rect(fill="white")) + 
+  theme(axis.text.y=element_text(colour=ifelse(orderedMethodShort1 %in% gcNormMethods, "dodgerblue", "black")))
 ggsave("~/Dropbox/research/atacseq/bulk/plots/benchmark_RUV1_noGCRLE.pdf")
 ```
 
@@ -177,7 +185,9 @@ ggplot(scoreDfOrdered2, aes(y=methodShort, x=dataset, fill=scaledRank)) +
   ggtitle("Two RUV variables") +
   ylab("") + xlab("Dataset") +
   theme(axis.text.x = element_text(angle = 30, vjust= 0.7, size=9),
-        axis.text.y = element_text(size=9))
+        axis.text.y = element_text(size=9)) + 
+  theme(panel.background = element_rect(fill="white")) + 
+  theme(axis.text.y=element_text(colour=ifelse(orderedMethodShort2 %in% gcNormMethods, "dodgerblue", "black")))
 ggsave("~/Dropbox/research/atacseq/bulk/plots/benchmark_RUV2_noGCRLE.pdf")
 ```
 
@@ -213,7 +223,9 @@ ggplot(scoreDfOrdered3, aes(y=methodShort, x=dataset, fill=scaledRank)) +
   ggtitle("Three RUV variables") +
   ylab("") + xlab("Dataset") +
   theme(axis.text.x = element_text(angle = 30, vjust= 0.7, size=9),
-        axis.text.y = element_text(size=9))
+        axis.text.y = element_text(size=9)) + 
+  theme(panel.background = element_rect(fill="white")) + 
+  theme(axis.text.y=element_text(colour=ifelse(orderedMethodShort3 %in% gcNormMethods, "dodgerblue", "black")))
 ggsave("~/Dropbox/research/atacseq/bulk/plots/benchmark_RUV3_noGCRLE.pdf")
 
 ```
@@ -250,7 +262,9 @@ ggplot(scoreDfOrdered4, aes(y=methodShort, x=dataset, fill=scaledRank)) +
   ggtitle("Four RUV variables") +
   ylab("") + xlab("Dataset") +
   theme(axis.text.x = element_text(angle = 30, vjust= 0.7, size=9),
-        axis.text.y = element_text(size=9))
+        axis.text.y = element_text(size=9)) + 
+  theme(panel.background = element_rect(fill="white")) + 
+  theme(axis.text.y=element_text(colour=ifelse(orderedMethodShort4 %in% gcNormMethods, "dodgerblue", "black")))
 ggsave("~/Dropbox/research/atacseq/bulk/plots/benchmark_RUV4_noGCRLE.pdf")
 
 ```
@@ -287,7 +301,9 @@ ggplot(scoreDfOrdered5, aes(y=methodShort, x=dataset, fill=scaledRank)) +
   ggtitle("Five RUV variables") +
   ylab("") + xlab("Dataset") +
   theme(axis.text.x = element_text(angle = 30, vjust= 0.7, size=9),
-        axis.text.y = element_text(size=9))
+        axis.text.y = element_text(size=9)) + 
+  theme(panel.background = element_rect(fill="white")) + 
+  theme(axis.text.y=element_text(colour=ifelse(orderedMethodShort5 %in% gcNormMethods, "dodgerblue", "black")))
 ggsave("~/Dropbox/research/atacseq/bulk/plots/benchmark_RUV5_noGCRLE.pdf")
 ```
 

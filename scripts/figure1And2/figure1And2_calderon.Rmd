@@ -275,8 +275,10 @@ pedgeR <- ggplot(dfEdgeR) +
   xlab("GC-content bin") +
   theme(axis.text.x = element_text(angle = 45, vjust = .5),
         legend.position = "none",
-        axis.title = element_text(size=16))
+        axis.title = element_text(size=16)) +
+  geom_smooth(se=FALSE, color="blue", aes(group=1), lwd=1)
 pedgeR
+
 ```
 
 ## DESeq2 (MOR normalization)
@@ -303,7 +305,8 @@ pdeseq <- ggplot(dfDESeq2) +
   xlab("GC-content bin") +
   theme(axis.text.x = element_text(angle = 45, vjust = .5),
         legend.position = "none",
-        axis.title = element_text(size=16))
+        axis.title = element_text(size=16)) +
+  geom_smooth(se=FALSE, color="blue", aes(group=1), lwd=1)
 pdeseq
 ```
 
@@ -330,7 +333,8 @@ pFQ <- ggplot(dfFQ) +
   xlab("GC-content bin") +
   theme(axis.text.x = element_text(angle = 45, vjust = .5),
         legend.position = "none",
-        axis.title = element_text(size=16))
+        axis.title = element_text(size=16)) +
+  geom_smooth(se=FALSE, color="blue", aes(group=1), lwd=1)
 pFQ
 ```
 
@@ -377,7 +381,8 @@ pCqn <- ggplot(dfCqn) +
   ggtitle("cqn normalization") +
   theme(axis.text.x = element_text(angle = 45, vjust = .5),
         legend.position = "none",
-        axis.title = element_text(size=16))
+        axis.title = element_text(size=16)) +
+  geom_smooth(se=FALSE, color="blue", aes(group=1), lwd=1)
 
 # ## EDASeq
 library(EDASeq)
@@ -404,7 +409,8 @@ pEDASeq <- ggplot(dfEDASeq) +
   ggtitle("FQ-FQ normalization") +
   theme(axis.text.x = element_text(angle = 45, vjust = .5),
         legend.position = "none",
-        axis.title = element_text(size=16))
+        axis.title = element_text(size=16)) +
+  geom_smooth(se=FALSE, color="blue", aes(group=1), lwd=1)
 
 
 ## GC-QN
@@ -427,7 +433,8 @@ pGCQN <- ggplot(dfGCQN) +
   ggtitle("GC-FQ normalization") +
   theme(axis.text.x = element_text(angle = 45, vjust = .5),
         legend.position = "none",
-        axis.title = element_text(size=16))
+        axis.title = element_text(size=16)) +
+  geom_smooth(se=FALSE, color="blue", aes(group=1), lwd=1)
 
 ## ridges plot before normalization
 countsN <- countsMemControl[,order(colSums(countsMemControl), decreasing=TRUE)[1:3]]

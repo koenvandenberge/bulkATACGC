@@ -49,9 +49,18 @@ plotRD <- function(rd, celltype, region, col=NULL, ...){
   legend("topleft", levels(region), pch=16, col=col[1:nlevels(region)], bty='n')
 }
 
-counts <- as.matrix(read.table("../../../data/fullard2019/boca_raw_count_matrix.tsv", header=TRUE, stringsAsFactors = FALSE))
-peaks <- read.table("../../../data/fullard2019/boca_peaks_consensus_no_blacklisted_regions.bed", header=FALSE, stringsAsFactors = FALSE)
+# counts <- as.matrix(read.table("../../../data/fullard2019/boca_raw_count_matrix.tsv", header=TRUE, stringsAsFactors = FALSE))
+# peaks <- read.table("../../../data/fullard2019/boca_peaks_consensus_no_blacklisted_regions.bed", header=FALSE, stringsAsFactors = FALSE)
+# colnames(peaks) <- c("chromosome", "start", "end", "name")
+countsURL <- "https://bendlj01.u.hpc.mssm.edu/multireg/resources/boca_raw_count_matrix.tsv.gz"
+download.file(countsURL, destfile="~/tmp/countsFullard.tsv.gz")
+counts <- as.matrix(read.table("~/tmp/countsFullard.tsv.gz", header=TRUE, stringsAsFactors = FALSE))
+
+peaksURL <- "https://bendlj01.u.hpc.mssm.edu/multireg/resources/boca_peaks_consensus_no_blacklisted_regions.bed"
+download.file(peaksURL, destfile="~/tmp/peaksFullard.bed")
+peaks <- read.table("~/tmp/peaksFullard.bed", header=FALSE, stringsAsFactors = FALSE)
 colnames(peaks) <- c("chromosome", "start", "end", "name")
+
 
 peakNames <- peaks$name
 sn <- substr(peaks$chromosome, 4, sapply(peaks$chromosome, nchar))
@@ -390,9 +399,10 @@ testDESeq2 <- function(counts, covarDf, L){
 design <- model.matrix(~region*celltype + individual)
 L_neur <- matrix(0, nrow=ncol(design), ncol=1)
 rownames(L_neur) <- colnames(design)
-L_neur[2:14,1] <- 1/14 #all regions of non-neuronal
-L_neur["celltypeN",1] <- -1 #main neuronal effect
-L_neur[grep(x=rownames(L_neur), pattern="^region.*celltypeN$"),1] <- -c(1/14) #all regions of neuronal
+# L_neur[2:14,1] <- 1/14 #all regions of non-neuronal
+L_neur["celltypeN",1] <- 1 #main neuronal effect
+# L_neur[grep(x=rownames(L_neur), pattern="^region.*celltypeN$"),1] <- 1/14 #all regions of neuronal
+L_neur[grep(x=rownames(L_neur), pattern=":celltypeN", fixed=TRUE),1] <- 1/14
 
 maPlotGC <- function(M, A, gc){
   require(ggplot2)

@@ -1,0 +1,317 @@
+---
+title: "Protocol data simulation"
+author: "Koen Van den Berge"
+date: "7/30/2020"
+output: html_document
+---
+
+# Load data
+
+```{r}
+source("~/Dropbox/research/atacseq/method/gcqn_validated.R")
+library(Rsubread)
+library(GenomicAlignments)
+library(scales)
+library(tidyverse)
+library(ggplot2)
+library(qsmooth)
+library(edgeR)
+library(cqn)
+gcqn_qsmooth <- function(counts, gcGroups, bio){
+  gcBinNormCounts <- matrix(NA, nrow=nrow(counts), ncol=ncol(counts), dimnames=list(rownames(counts),colnames(counts)))
+  for(ii in 1:nlevels(gcGroups)){
+    id <- which(gcGroups==levels(gcGroups)[ii])
+    countBin <- counts[id,]
+    qs <- qsmooth(countBin, group_factor=bio)
+    normCountBin <- qs@qsmoothData
+    normCountBin <- round(normCountBin)
+    normCountBin[normCountBin<0] <- 0
+    gcBinNormCounts[id,] <- normCountBin
+  }
+  return(gcBinNormCounts)
+}
+# note that genome patch is likely not identical to the one used by Tiffany for mapping.
+# download.file("ftp://ftp.ncbi.nlm.nih.gov/genomes/all/GCA/000/001/635/GCA_000001635.8_GRCm38.p6/GCA_000001635.8_GRCm38.p6_genomic.fna.gz", destfile="/home/compomics/koen/genomes/mm10/p6/GCA_000001635.8_GRCm38.p6_genomic.fna.gz")
+
+makeGR_broadPeak <- function(file, genome){
+  ## this is for broadPeak files, e.g. from MACS2.
+
+  # import peaks and make GenomicRanges
+  peaks <- read.delim(file, header=FALSE)
+  peakID <- unlist(lapply(strsplit(as.character(peaks[,4]),split="_"),function(x) paste(x[4:5], collapse="_")))
+  peaksGr <- GRanges(seqnames=gsub(x=as.character(peaks[,1]), pattern="chr", replacement=""), ranges=IRanges(start=peaks[,2], end=peaks[,3]), strand=NA, mcols=DataFrame(peakID=peakID))
+  names(peaksGr) <- mcols(peaksGr)[,1]
+
+  # get GC content of peaks
+  ff <- FaFile(genome)
+  peakSeqs <- getSeq(x=ff, peaksGr)
+  gcContentPeaks <- letterFrequency(peakSeqs, "GC",as.prob=TRUE)[,1]
+  mcols(peaksGr) <- cbind(mcols(peaksGr), gc=gcContentPeaks)
+  return(peaksGr)
+}
+
+# MACS paired-end
+grMacsPE <- makeGR_broadPeak(file="~/Dropbox/compomicsVM/protocolDAta/pooledPeaksMACS2_allProtocolSamples_cutoff10_peaks.broadPeak", genome="~/data/genomes/mouse/Mus_musculus.GRCm38.dna.primary_assembly.fa")
+fcMacsPE <- readRDS("~/Dropbox/compomicsVM/protocolDAta/featureCounts_MACS2BAMPE.rds")
+
+
+# get metadata
+library(openxlsx)
+metadata <- read.xlsx("~/Dropbox/research/atacseq/bulk/analysis/protocolData/20180611_atacseq_metadata.xlsx")
+index <-  metadata[,"Index.#"]
+batch <- as.factor(ifelse(metadata$Transposition.date==43228,"A","B"))
+cellNumber <- metadata$Cell.number
+atacMethod <- as.factor(metadata$ATACseq.method)
+pcrCycle <- metadata$PCR.cycles
+cellType <- metadata$Cell.type
+
+knitr::kable(metadata[,2:5])
+```
+
+
+# EDA
+
+```{r}
+plotWidthHex <- function(gr, counts){
+  counts2 <- counts
+  colnames(counts2) <- paste0("Batch_",batch,",n=",cellNumber,",method_",atacMethod,",PCRcycs_",pcrCycle,",id",index)
+  df <- as_tibble(cbind(counts2,width=width(gr)))
+  df <- gather(df, sample, value, -width)
+  ggplot(data=df, aes(x=log(width+1), y=log(value+1)) ) + ylab("log(count + 1)") + xlab("log(width + 1)") + geom_hex(bins = 50) + theme_bw() + facet_wrap(~sample, nrow=2) #+ annotate("text",label=cellType, x=0.5, y=12, size=3)
+}
+plotWidthHex(gr=grMacsPE, fcMacsPE$counts) + xlim(3,10) + ggtitle("Peak caller: MACS PE")
+
+plotGCHex <- function(gr, counts){
+  counts2 <- counts
+  colnames(counts2) <- paste0("Batch_",batch,",n=",cellNumber,",method_",atacMethod,",PCRcycs_",pcrCycle,",id",index)
+  df <- as_tibble(cbind(counts2,gc=mcols(gr)$gc))
+  df <- gather(df, sample, value, -gc)
+  ggplot(data=df, aes(x=gc, y=log(value+1)) ) + ylab("log(count + 1)") + xlab("GC content") + geom_hex(bins = 50) + theme_bw() + facet_wrap(~sample, nrow=2) #+ annotate("text",label=cellType, x=0.5, y=12, size=3)
+}
+plotGCHex(gr=grMacsPE, fcMacsPE$counts) + ggtitle("Peak caller: MACS PE")
+```
+
+
+
+```{r}
+evaluateSimulation <- function(simCounts, simGC, simWidth, design, deId, grSim, nSamples, grpSim){
+  testEdgeR <- function(counts, design, tmm=FALSE, offset=NULL){
+    d <- DGEList(counts)
+    if(tmm) d <- calcNormFactors(d)
+    if(!is.null(offset)) d$offset <- offset
+    d <- estimateDisp(d, design)
+    fit <- glmFit(d, design)
+    lrt <- glmLRT(fit, coef=2)
+    lrt$table$padj <- p.adjust(lrt$table$PValue, "fdr")
+    return(lrt)
+  }
+  
+  library(DESeq2)
+  testDESeq2 <- function(counts, covarDf){
+    dds <- DESeqDataSetFromMatrix(counts,
+                                colData=covarDf,
+                                design=as.formula("~ group"))
+    dds <- DESeq(dds)
+    res <- results(dds)
+    return(res)
+  }
+  
+  ## normalize
+  ## TMM
+  d <- DGEList(simCounts)
+  d <- calcNormFactors(d)
+  cpmTMM <- edgeR::cpm(d, normalized.lib.sizes=TRUE, log=TRUE, prior.count=0.25)
+  
+  ## FQN
+  fqCounts <- FQnorm(simCounts)
+  cpmFQ <- edgeR::cpm(fqCounts, normalized.lib.sizes=FALSE, log=TRUE, prior.count=0.25)
+  
+  ## qsmooth
+  qsmoothObj <- qsmooth(object = simCounts, group_factor = grpSim)
+  qsmoothCounts <- qsmoothData(qsmoothObj)
+  
+  ## cqn
+  cqnObj <- cqn(simCounts, x=simGC, lengths=simWidth, sizeFactors=colSums(simCounts))
+  cqnplot(cqnObj, xlab="GC content", lwd=2)
+  cqnCounts <- 2^(cqnObj$y + cqnObj$offset)
+  cpmCqn <- edgeR::cpm(cqnCounts, normalized.lib.sizes=FALSE, log=TRUE, prior.count=0.25)
+  
+  ## GCQN:
+  gcGroups <- Hmisc::cut2(simGC, g=50)
+  countsGCQN <- gcqn(simCounts, gcGroups, summary="median", round=TRUE)
+  cpmGCQN <- edgeR::cpm(countsGCQN, normalized.lib.sizes=FALSE, log=TRUE, prior.count=0.25)
+  
+  ## smooth GCQN
+  normCountsGcqnSmooth <- gcqn_qsmooth(simCounts, gcGroups, bio=grpSim)
+  
+  ## EDASeq
+  library(EDASeq)
+  wit <- withinLaneNormalization(x=as.matrix(simCounts), y=simGC, which="full")
+  countsEDASeq <- betweenLaneNormalization(wit, "full")
+  cpmEDASeq <- edgeR::cpm(countsEDASeq, normalized.lib.sizes=FALSE, log=TRUE, prior.count=0.25)
+  
+  ## RUVg
+  library(RUVSeq)
+  hk <- readRDS("~/data/genomes/hkListMouseGenomicRanges.rds")
+  qh <- queryHits(findOverlaps(grSim[-deId], hk, type="within"))
+  #qh <- queryHits(findOverlaps(grSim, hk, type="within"))
+  negcon <- rownames(simCounts)[qh]
+  ruvRes <- RUVg(as.matrix(simCounts), negcon, k=2)
+  ruvgCounts <- ruvRes$normalizedCounts
+  cpmRUV <- edgeR::cpm(ruvgCounts, normalized.lib.sizes=FALSE, log=TRUE, prior.count=0.25)
+  
+  ## RUVs
+  # scid <- matrix(c(which(design[,2] == 0),
+  #          which(design[,2] == 1)),
+  #        nrow=2, ncol=nSamples/2, byrow=TRUE)
+  # ruvsRes <- RUVs(as.matrix(simCounts), 
+  #                 cIdx = 1:nrow(simCounts),
+  #                 scIdx = scid,
+  #                 k=2)
+  # ruvsCounts <- ruvsRes$normalizedCounts
+
+  
+  
+  # TMM
+  resTMM <- testEdgeR(simCounts, design, tmm=TRUE)
+  # DESeq2 MOR
+  resDESeq2 <- testDESeq2(simCounts, covarDf=data.frame(group=grpSim))
+  # Cqn
+  resCqn <- testEdgeR(simCounts, design, tmm=FALSE, offset=cqnObj$glm.offset)
+  #FQ
+  resFQ <- testEdgeR(fqCounts, design, tmm=FALSE)
+  # qsmooth
+  resQsmooth <- testEdgeR(qsmoothCounts, design, tmm=FALSE)
+  # EDASEQ
+  resEDASeq <- testEdgeR(countsEDASeq, design, tmm=FALSE)
+  # GCQN
+  resGCQN <- testEdgeR(countsGCQN, design, tmm=FALSE)
+  # smooth GCQN
+  resGCQNSmooth <- testEdgeR(normCountsGcqnSmooth, design, tmm=FALSE)
+  # RUVg
+  resRUVg <- testEdgeR(ruvgCounts, design, tmm=FALSE)
+  # RUVs
+  #resRUVs <- testEdgeR(ruvsCounts, design, tmm=FALSE)
+
+  
+  truth <- rep(0, nrow(simCounts))
+  truth[deId] <- 1
+  truthDf <- data.frame(truth=truth)
+  rownames(truthDf) <- rownames(simCounts)
+  
+  library(iCOBRA)
+  cbd1 <- COBRAData(pval = data.frame(TMM=resTMM$table$PValue,
+                                     DESeq2=resDESeq2$pvalue,
+                                     qsmooth=resQsmooth$table$PValue,
+                                      cqn=resCqn$table$PValue,
+                                      FQ=resFQ$table$PValue,
+                                      edaseq=resEDASeq$table$PValue,
+                                      gcqn=resGCQN$table$PValue,
+                                      gcqn_smooth=resGCQNSmooth$table$PValue,
+                                      RUVg=resRUVg$table$PValue,
+                                      #RUVs=resRUVs$table$PValue,
+                                      row.names=rownames(simCounts)),
+            truth = truthDf)
+  # cbd <- calculate_adjp(cbd1)
+  # cbd <- calculate_performance(cbd, binary_truth = "truth")
+  # cbp <- prepare_data_for_plot(cbd)
+  # p <- plot_fdrtprcurve(cbp, pointsize=2, yaxisrange=c(0,1),
+  #                       title=paste0(nSamples," samples"))
+  # print(p)
+  #return(list(cbd=cbd1, p=p))
+  return(cbd1)
+}
+
+
+simulateAndEvaluate <- function(seed, nTotal, inputCounts, grp, nDE, meanlog=0.8, sdlog=0.1, simGC, simWidth, grSim){
+  
+  set.seed(seed)
+  n1 <- 1:(nTotal/2)
+  n2 <- (nTotal/2+1):nTotal
+  fractions <- sweep(inputCounts, 2, colSums(inputCounts), "/")
+  inputCountssim <- matrix(NA, nrow=nrow(inputCounts), ncol=nTotal,
+                     dimnames=list(rownames(inputCounts), paste0("sample", 1:nTotal)))
+  remainingSamplesA <- which(grp == "A")
+  remainingSamplesB <- which(grp == "B")
+  
+  deId <- sample(x=1:nrow(inputCounts), size=nDE)
+  delta <- rep(0, nrow(inputCounts))
+  sign <- rep(c(1,-1), each=nDE/2)
+  if(length(sign) != nDE) sign <- c(sign,1)
+  # delta[deId] <- sign*log(rlnorm(n=1e4, meanlog=3, sdlog=1.2))
+  delta[deId] <- sign*log(rlnorm(n=nDE, meanlog=meanlog, sdlog=sdlog))
+  hist(delta[deId],  breaks=40)
+  
+  # group 1
+  for(ss in n1){
+    sampleId <- sample(x=remainingSamplesA, size=1)
+    remainingSamplesA <- remainingSamplesA[!remainingSamplesA %in% sampleId]
+    curLS <- runif(n=1, min(colSums(inputCounts)), max(colSums(inputCounts)))
+    curFracs <- fractions[,sampleId]
+    curFracs[delta < 0] <- (curFracs[delta < 0]) * exp(abs(delta[delta < 0]))
+    simY <- rmultinom(n=1, size=curLS, prob=curFracs)
+    inputCountssim[,ss] <- simY
+  }
+  
+  # group 2
+  for(ss in n2){
+    sampleId <- sample(x=remainingSamplesB, size=1)
+    remainingSamplesB <- remainingSamplesB[!remainingSamplesB %in% sampleId]
+    curLS <- runif(n=1, min(colSums(inputCounts)), max(colSums(inputCounts)))
+    curFracs <- fractions[,sampleId]
+    curFracs[delta > 0] <- (curFracs[delta > 0]) * exp(abs(delta[delta > 0]))
+    simY <- rmultinom(n=1, size=curLS, prob=curFracs)
+    inputCountssim[,ss] <- simY
+  }
+  
+  plot(x=delta, y=log(rowMeans(inputCountssim[,n2]) / rowMeans(inputCountssim[,n1])))
+  abline(0,1, col="red")
+  abline(h=0, col="blue", lty=2)
+  
+  grpSim <- factor(rep(c("A", "B"), each=nTotal/2))
+  evaluateSimulation(simCounts = inputCountssim, 
+                     simGC = simGC, 
+                     simWidth = simWidth, 
+                     design = model.matrix(~grpSim), 
+                     deId = deId, 
+                     grSim = grSim,
+                     nSamples = nTotal,
+                     grpSim = grpSim)
+}
+
+```
+
+
+```{r}
+inputCounts <- fcMacsPE$counts
+ct <- metadata$Cell.type
+# grp <- vector(length=length(ct))
+# grp[grep(x=ct, pattern="ICAM1-", fixed=TRUE)] <- "A"
+# grp[grep(x=ct, pattern="ICAM1+", fixed=TRUE)] <- "B"
+simGC <- mcols(grMacsPE)$gc
+simWidth <- width(grMacsPE)
+
+nDEParams <- round(nrow(inputCounts)/c(10,4))
+nTotalParams <- c(8, 10)
+for(nde in 1:length(nDEParams)){
+  for(ntot in 1:length(nTotalParams)){
+      resList <- list()
+    for(iter in 1:14){
+      grp <- sample(rep(c("A", "B"), each=5))
+      resList[[iter]] <- simulateAndEvaluate(seed=iter, 
+                                             nTotal=nTotalParams[ntot], 
+                                             inputCounts=inputCounts, 
+                                             grp=grp, 
+                                             nDE=nDEParams[nde], 
+                                             meanlog=0.8, 
+                                             sdlog=0.1, 
+                                             simGC=simGC, 
+                                             simWidth=simWidth, 
+                                             grSim=grMacsPE)
+    }
+    saveRDS(resList, file=paste0("simRes_n",nTotalParams[ntot],"_nDE",nde,".rds"))
+  }
+}
+
+```
+
