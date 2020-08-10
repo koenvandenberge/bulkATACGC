@@ -1,5 +1,5 @@
 ---
-title: "ATAC-seq normalization summary, polished"
+title: "ATAC-seq normalization benchmark: biplots"
 author: "Koen Van den Berge"
 date: "12/12/2019"
 output: html_document
@@ -21,7 +21,8 @@ rmMethods <- c("gcqn_mean", "gcqn_median_10", "gcqn_median_20",  "gcqn_median_10
 
 library(ggplot2)
 library(scone)
-filesDir <- "../../objects/"
+#filesDir <- "../../objects/"
+filesDir <- "objects/"
 files <- list.files(filesDir,
                     pattern = "*scores.rds$")
 datasets <- unlist(lapply(strsplit(files, split="_"),"[[",1))
@@ -38,7 +39,7 @@ scores <- lapply(scores, function(scoreMat){
 
 ```
 
-# Biplots
+# Biplots for no UV
 
 ```{r}
 getMethodNames <- function(pc_obj){
@@ -57,6 +58,29 @@ getMethodNames <- function(pc_obj){
   methodNames <- gsub(methodNames, pattern="deseq", replacement="DESeq")
   return(methodNames)
 }
+
+pdf("~/Dropbox/research/atacseq/bulk/plots/benchmark_biplots_noUV.pdf")
+for(ii in 1:length(scores)){
+  scores1 <- scores[[ii]]
+  scores1 <- scores1[grep(x=rownames(scores1), pattern="no_uv"),]
+  pc_obj = prcomp(apply(t(scores1),1,rank),
+                  center = TRUE,scale = FALSE)
+  methodNames <- getMethodNames(pc_obj)
+  par(bty='l')
+  bp_obj = biplot_color(pc_obj,y = -rowMeans(apply(scores1,2,rank)),expand = .6,
+                        main=datasets[ii], xlim=c(-0.45, 0.4), cex=2)
+  text(x=bp_obj[,1], y=bp_obj[,2], labels=methodNames, cex=1.1)
+}
+dev.off()
+
+```
+
+
+
+# Biplots for no UV and RUV k=2
+
+```{r}
+
 
 pdf("~/Dropbox/research/atacseq/bulk/plots/benchmark_biplots.pdf")
 for(ii in 1:length(scores)){

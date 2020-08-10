@@ -1,0 +1,280 @@
+---
+title: "Benchmark main figure"
+author: "Koen Van den Berge"
+date: "8/10/2020"
+output: html_document
+---
+
+```{r}
+library(ggplot2)
+library(tidyverse)
+getMeanScoreRank <- function(scores){
+  scoreT <- t(scores)
+  ranked_scores <- apply(scoreT,1,rank)
+  mean_score_rank <- rowMeans(ranked_scores)
+  mean_score_rank <- mean_score_rank[order(mean_score_rank, decreasing=TRUE)]
+  return(mean_score_rank)
+}
+gcNormMethods <- c("FQ-FQ", "GC-FQ", "cqn_length", "cqn", "GC-FQ_smooth")
+rmMethods <- c("gcqn_mean", "gcqn_median_10", "gcqn_median_20",  "gcqn_median_100",
+               "gcqn_median_permuted")
+```
+
+
+
+# Full evaluation
+
+```{r}
+filesDir <- "objects/"
+library(ggplot2)
+files <- list.files(filesDir,
+                    pattern = "*scores.rds$")
+datasets <- unlist(lapply(strsplit(files, split="_"),"[[",1))
+datasets[datasets %in% "geschwind2018"] <- "torre-ubieta2018"
+scores <- sapply(1:length(files), function(ii) readRDS(paste0(filesDir,files[ii])))
+# remove other methods
+scores <- lapply(scores, function(scoreMat){
+  scoreNames <- rownames(scoreMat)
+  rmID <- unlist(sapply(rmMethods, function(method){
+    grep(x=scoreNames, pattern=method)
+  }))
+  return(scoreMat[-rmID,])
+})
+scoreRanks <- lapply(scores, getMeanScoreRank)
+rankVector <- do.call(c,scoreRanks)
+scoreDfLong <- data.frame(method=names(rankVector),
+                          dataset=unlist(mapply(rep,datasets,unlist(lapply(scoreRanks,length)))),
+                          rank=rankVector)
+
+pal <- wesanderson::wes_palette("Zissou1", n=40, type="continuous")
+
+id0 <- grep(x=scoreDfLong$method, pattern="no_uv")
+scoreDf0 <- scoreDfLong[id0,]
+scoreDf0$methodShort <- unlist(lapply(strsplit(as.character(scoreDf0$method), split=","), "[[", 2))
+scoreDf0$methodShort[scoreDf0$methodShort == "gcqn_median_50"] <- "GC-FQ"
+scoreDf0$methodShort[scoreDf0$methodShort == "edaseq"] <- "FQ-FQ"
+scoreDf0$methodShort[scoreDf0$methodShort == "gcqn_smooth"] <- "GC-FQ_smooth"
+scoreDf0$methodShort[scoreDf0$methodShort == "fq"] <- "FQ"
+scoreDf0$methodShort[scoreDf0$methodShort == "tmm"] <- "TMM"
+scoreDf0$methodShort[scoreDf0$methodShort == "deseq"] <- "DESeq2"
+scoreDf0$methodShort[scoreDf0$methodShort == "uq"] <- "UQ"
+scoreDf0$methodShort[scoreDf0$methodShort == "none"] <- "None"
+scoreDf0$methodShort[scoreDf0$methodShort == "sum"] <- "Sum"
+scoreDf0$methodShort <- factor(scoreDf0$methodShort)
+
+## scale ranks
+scoreDf0 <- scoreDf0 %>% group_by(dataset) %>% mutate(scaledRank=scale(rank))
+
+## take average of scaled ranks
+avRank0 <- scoreDf0 %>% group_by(methodShort) %>% summarize(avRank=mean(scaledRank))
+oo0 <- order(avRank0$avRank, decreasing=TRUE)
+orderedMethodShort0 <- avRank0$methodShort[oo0]
+
+scoreDfOrdered0 <- scoreDf0
+scoreDfOrdered0$methodShort <- factor(scoreDfOrdered0$methodShort, levels=orderedMethodShort0)
+pFull <- ggplot(scoreDfOrdered0, aes(y=methodShort, x=dataset, fill=scaledRank)) + 
+  geom_tile() + 
+  scale_fill_gradientn(colours = pal, name = 'Scaled Scone\nrank') +
+  ggtitle("Full evaluation") +
+  ylab("") + xlab("Dataset") +
+  theme(axis.text.x = element_text(angle = 30, vjust= 0.7, size=9),
+        axis.text.y = element_text(size=9)) + 
+  theme(panel.background = element_rect(fill="white")) + 
+  theme(axis.text.y=element_text(colour=ifelse(orderedMethodShort0 %in% gcNormMethods, "dodgerblue", "black")))
+```
+
+# Permuted GC-content
+
+```{r}
+filesDir <- "objects/"
+library(ggplot2)
+files <- list.files(filesDir,
+                    pattern = "*scores_permuted.rds$")
+datasets <- unlist(lapply(strsplit(files, split="_"),"[[",1))
+datasets[datasets %in% "geschwind2018"] <- "torre-ubieta2018"
+scores <- sapply(1:length(files), function(ii) readRDS(paste0(filesDir,files[ii])))
+# remove other methods
+scores <- lapply(scores, function(scoreMat){
+  scoreNames <- rownames(scoreMat)
+  rmID <- unlist(sapply(rmMethods, function(method){
+    grep(x=scoreNames, pattern=method)
+  }))
+  return(scoreMat[-rmID,])
+})
+scoreRanks <- lapply(scores, getMeanScoreRank)
+rankVector <- do.call(c,scoreRanks)
+scoreDfLong <- data.frame(method=names(rankVector),
+                          dataset=unlist(mapply(rep,datasets,unlist(lapply(scoreRanks,length)))),
+                          rank=rankVector)
+
+pal <- wesanderson::wes_palette("Zissou1", n=40, type="continuous")
+
+id0 <- grep(x=scoreDfLong$method, pattern="no_uv")
+scoreDf0 <- scoreDfLong[id0,]
+scoreDf0$methodShort <- unlist(lapply(strsplit(as.character(scoreDf0$method), split=","), "[[", 2))
+scoreDf0$methodShort[scoreDf0$methodShort == "gcqn_median_50"] <- "GC-FQ"
+scoreDf0$methodShort[scoreDf0$methodShort == "edaseq"] <- "FQ-FQ"
+scoreDf0$methodShort[scoreDf0$methodShort == "gcqn_smooth"] <- "GC-FQ_smooth"
+scoreDf0$methodShort[scoreDf0$methodShort == "fq"] <- "FQ"
+scoreDf0$methodShort[scoreDf0$methodShort == "tmm"] <- "TMM"
+scoreDf0$methodShort[scoreDf0$methodShort == "deseq"] <- "DESeq2"
+scoreDf0$methodShort[scoreDf0$methodShort == "uq"] <- "UQ"
+scoreDf0$methodShort[scoreDf0$methodShort == "none"] <- "None"
+scoreDf0$methodShort[scoreDf0$methodShort == "sum"] <- "Sum"
+scoreDf0$methodShort <- factor(scoreDf0$methodShort)
+
+## scale ranks
+scoreDf0 <- scoreDf0 %>% group_by(dataset) %>% mutate(scaledRank=scale(rank))
+
+## take average of scaled ranks
+avRank0 <- scoreDf0 %>% group_by(methodShort) %>% summarize(avRank=mean(scaledRank))
+oo0 <- order(avRank0$avRank, decreasing=TRUE)
+orderedMethodShort0 <- avRank0$methodShort[oo0]
+
+scoreDfOrdered0 <- scoreDf0
+scoreDfOrdered0$methodShort <- factor(scoreDfOrdered0$methodShort, levels=orderedMethodShort0)
+pPermuted <- ggplot(scoreDfOrdered0, aes(y=methodShort, x=dataset, fill=scaledRank)) + 
+  geom_tile() + 
+  scale_fill_gradientn(colours = pal, name = 'Scaled Scone\nrank') +
+  ggtitle("Permuted GC-content") +
+  ylab("") + xlab("Dataset") +
+  theme(axis.text.x = element_text(angle = 30, vjust= 0.7, size=9),
+        axis.text.y = element_text(size=9)) + 
+  theme(panel.background = element_rect(fill="white")) + 
+  theme(axis.text.y=element_text(colour=ifelse(orderedMethodShort0 %in% gcNormMethods, "dodgerblue", "black")))
+```
+
+# No GC evaluation measures
+
+```{r}
+filesDir <- "objects/"
+library(ggplot2)
+files <- list.files(filesDir,
+                    pattern = "*scores.rds$")
+datasets <- unlist(lapply(strsplit(files, split="_"),"[[",1))
+datasets[datasets %in% "geschwind2018"] <- "torre-ubieta2018"
+scores <- sapply(1:length(files), function(ii) readRDS(paste0(filesDir,files[ii])))
+# remove other methods
+scores <- lapply(scores, function(scoreMat){
+  scoreNames <- rownames(scoreMat)
+  rmID <- unlist(sapply(rmMethods, function(method){
+    grep(x=scoreNames, pattern=method)
+  }))
+  return(scoreMat[-rmID,])
+})
+scores <- lapply(scores, function(x) x[,!colnames(x) %in% c("RLE_MED","RLE_IQR")])
+scoreRanks <- lapply(scores, getMeanScoreRank)
+rankVector <- do.call(c,scoreRanks)
+scoreDfLong <- data.frame(method=names(rankVector),
+                          dataset=unlist(mapply(rep,datasets,unlist(lapply(scoreRanks,length)))),
+                          rank=rankVector)
+
+pal <- wesanderson::wes_palette("Zissou1", n=40, type="continuous")
+
+id0 <- grep(x=scoreDfLong$method, pattern="no_uv")
+scoreDf0 <- scoreDfLong[id0,]
+scoreDf0$methodShort <- unlist(lapply(strsplit(as.character(scoreDf0$method), split=","), "[[", 2))
+scoreDf0$methodShort[scoreDf0$methodShort == "gcqn_median_50"] <- "GC-FQ"
+scoreDf0$methodShort[scoreDf0$methodShort == "edaseq"] <- "FQ-FQ"
+scoreDf0$methodShort[scoreDf0$methodShort == "gcqn_smooth"] <- "GC-FQ_smooth"
+scoreDf0$methodShort[scoreDf0$methodShort == "fq"] <- "FQ"
+scoreDf0$methodShort[scoreDf0$methodShort == "tmm"] <- "TMM"
+scoreDf0$methodShort[scoreDf0$methodShort == "deseq"] <- "DESeq2"
+scoreDf0$methodShort[scoreDf0$methodShort == "uq"] <- "UQ"
+scoreDf0$methodShort[scoreDf0$methodShort == "none"] <- "None"
+scoreDf0$methodShort[scoreDf0$methodShort == "sum"] <- "Sum"
+scoreDf0$methodShort <- factor(scoreDf0$methodShort)
+
+## scale ranks
+scoreDf0 <- scoreDf0 %>% group_by(dataset) %>% mutate(scaledRank=scale(rank))
+
+## take average of scaled ranks
+avRank0 <- scoreDf0 %>% group_by(methodShort) %>% summarize(avRank=mean(scaledRank))
+oo0 <- order(avRank0$avRank, decreasing=TRUE)
+orderedMethodShort0 <- avRank0$methodShort[oo0]
+
+scoreDfOrdered0 <- scoreDf0
+scoreDfOrdered0$methodShort <- factor(scoreDfOrdered0$methodShort, levels=orderedMethodShort0)
+p_noGC <- ggplot(scoreDfOrdered0, aes(y=methodShort, x=dataset, fill=scaledRank)) + 
+  geom_tile() + 
+  scale_fill_gradientn(colours = pal, name = 'Scaled Scone\nrank') +
+  ggtitle("No GC-content evaluation measures") +
+  ylab("") + xlab("Dataset") +
+  theme(axis.text.x = element_text(angle = 30, vjust= 0.7, size=9),
+        axis.text.y = element_text(size=9)) + 
+  theme(panel.background = element_rect(fill="white")) + 
+  theme(axis.text.y=element_text(colour=ifelse(orderedMethodShort0 %in% gcNormMethods, "dodgerblue", "black")))
+```
+
+# No RLE evaluation measures
+
+```{r}
+filesDir <- "objects/"
+library(ggplot2)
+files <- list.files(filesDir,
+                    pattern = "*scores.rds$")
+datasets <- unlist(lapply(strsplit(files, split="_"),"[[",1))
+datasets[datasets %in% "geschwind2018"] <- "torre-ubieta2018"
+scores <- sapply(1:length(files), function(ii) readRDS(paste0(filesDir,files[ii])))
+# remove other methods
+scores <- lapply(scores, function(scoreMat){
+  scoreNames <- rownames(scoreMat)
+  rmID <- unlist(sapply(rmMethods, function(method){
+    grep(x=scoreNames, pattern=method)
+  }))
+  return(scoreMat[-rmID,])
+})
+scores <- lapply(scores, function(x) x[,!colnames(x) %in% c("RLE_MED","RLE_IQR","rleGC_med","rleGC_iqr")])
+scoreRanks <- lapply(scores, getMeanScoreRank)
+rankVector <- do.call(c,scoreRanks)
+scoreDfLong <- data.frame(method=names(rankVector),
+                          dataset=unlist(mapply(rep,datasets,unlist(lapply(scoreRanks,length)))),
+                          rank=rankVector)
+
+pal <- wesanderson::wes_palette("Zissou1", n=40, type="continuous")
+
+id0 <- grep(x=scoreDfLong$method, pattern="no_uv")
+scoreDf0 <- scoreDfLong[id0,]
+scoreDf0$methodShort <- unlist(lapply(strsplit(as.character(scoreDf0$method), split=","), "[[", 2))
+scoreDf0$methodShort[scoreDf0$methodShort == "gcqn_median_50"] <- "GC-FQ"
+scoreDf0$methodShort[scoreDf0$methodShort == "edaseq"] <- "FQ-FQ"
+scoreDf0$methodShort[scoreDf0$methodShort == "gcqn_smooth"] <- "GC-FQ_smooth"
+scoreDf0$methodShort[scoreDf0$methodShort == "fq"] <- "FQ"
+scoreDf0$methodShort[scoreDf0$methodShort == "tmm"] <- "TMM"
+scoreDf0$methodShort[scoreDf0$methodShort == "deseq"] <- "DESeq2"
+scoreDf0$methodShort[scoreDf0$methodShort == "uq"] <- "UQ"
+scoreDf0$methodShort[scoreDf0$methodShort == "none"] <- "None"
+scoreDf0$methodShort[scoreDf0$methodShort == "sum"] <- "Sum"
+scoreDf0$methodShort <- factor(scoreDf0$methodShort)
+
+## scale ranks
+scoreDf0 <- scoreDf0 %>% group_by(dataset) %>% mutate(scaledRank=scale(rank))
+
+## take average of scaled ranks
+avRank0 <- scoreDf0 %>% group_by(methodShort) %>% summarize(avRank=mean(scaledRank))
+oo0 <- order(avRank0$avRank, decreasing=TRUE)
+orderedMethodShort0 <- avRank0$methodShort[oo0]
+
+scoreDfOrdered0 <- scoreDf0
+scoreDfOrdered0$methodShort <- factor(scoreDfOrdered0$methodShort, levels=orderedMethodShort0)
+p_noRLE <- ggplot(scoreDfOrdered0, aes(y=methodShort, x=dataset, fill=scaledRank)) + 
+  geom_tile() + 
+  scale_fill_gradientn(colours = pal, name = 'Scaled Scone\nrank') +
+  ggtitle("No RLE measures") +
+  ylab("") + xlab("Dataset") +
+  theme(axis.text.x = element_text(angle = 30, vjust= 0.7, size=9),
+        axis.text.y = element_text(size=9)) + 
+  theme(panel.background = element_rect(fill="white")) + 
+  theme(axis.text.y=element_text(colour=ifelse(orderedMethodShort0 %in% gcNormMethods, "dodgerblue", "black")))
+```
+
+# Composite plot
+
+```{r}
+cowplot::plot_grid(pFull, pPermuted,
+                   p_noGC, p_noRLE,
+                   nrow=2, ncol=2, labels=letters[1:4])
+ggsave("~/Dropbox/research/atacseq/bulk/plots/sconeBenchmarkMain.pdf",
+       width=11, height=9)
+```
+
