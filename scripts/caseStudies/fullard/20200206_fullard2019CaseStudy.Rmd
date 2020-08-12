@@ -301,14 +301,23 @@ for(pp in 1:length(pcs)){
   set.seed(pp)
   nPC <- pcs[pp]
   
-  umRaw <- irlba::irlba(log1p(counts), nv=nPC)$v
-  umEdgeR <- irlba::irlba(log1p(normCountsEdgeR), nv=nPC)$v
-  umDESeq2 <- irlba::irlba(log1p(normCountsDESeq2), nv=nPC)$v
-  umFQ <- irlba::irlba(log1p(normCountsFQ), nv=nPC)$v
-  umCqn <- irlba::irlba(log1p(normCountsCqn), nv=nPC)$v
-  umEDASeq <- irlba::irlba(log1p(normCountsEDASeq), nv=nPC)$v
-  umGcqn <- irlba::irlba(log1p(normCountsGcqn), nv=nPC)$v
-  umGcqnSmooth <- irlba::irlba(log1p(normCountsGcqnSmooth), nv=nPC)$v
+  # umRaw <- irlba::irlba(log1p(counts), nv=nPC)$v
+  # umEdgeR <- irlba::irlba(log1p(normCountsEdgeR), nv=nPC)$v
+  # umDESeq2 <- irlba::irlba(log1p(normCountsDESeq2), nv=nPC)$v
+  # umFQ <- irlba::irlba(log1p(normCountsFQ), nv=nPC)$v
+  # umCqn <- irlba::irlba(log1p(normCountsCqn), nv=nPC)$v
+  # umEDASeq <- irlba::irlba(log1p(normCountsEDASeq), nv=nPC)$v
+  # umGcqn <- irlba::irlba(log1p(normCountsGcqn), nv=nPC)$v
+  # umGcqnSmooth <- irlba::irlba(log1p(normCountsGcqnSmooth), nv=nPC)$v
+  
+  umRaw <- prcomp(t(log1p(counts)))$x[,1:nPC]
+  umEdgeR <- prcomp(t(log1p(normCountsEdgeR)))$x[,1:nPC]
+  umDESeq2 <- prcomp(t(log1p(normCountsDESeq2)))$x[,1:nPC]
+  umFQ <- prcomp(t(log1p(normCountsFQ)))$x[,1:nPC]
+  umCqn <- prcomp(t(log1p(normCountsCqn)))$x[,1:nPC]
+  umEDASeq <- prcomp(t(log1p(normCountsEDASeq)))$x[,1:nPC]
+  umGcqn <- prcomp(t(log1p(normCountsGcqn)))$x[,1:nPC]
+  umGcqnSmooth <- prcomp(t(log1p(normCountsGcqnSmooth)))$x[,1:nPC]
 
   
   plotRD(umRaw, celltype, regionBig, main="Raw counts")
@@ -583,7 +592,7 @@ cowplot::plot_grid(pcaAriPlots,
                    labels=c("", "c",""),
                    nrow=1, ncol=3,
                    rel_widths = c(1,1.2,.3))
-# ggsave("~/Dropbox/research/atacseq/bulk/plots/fullard_mainFigure.pdf", width=13, height=9)
+ggsave("~/Dropbox/research/atacseq/bulk/plots/fullard_mainFigure.pdf", width=13, height=9)
 ```
 
 
