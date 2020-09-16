@@ -37,7 +37,7 @@ sn <- unlist(lapply(lapply(strsplit(rn,split="_"),"[",1),function(x) gsub(patter
 start <- as.numeric(unlist(lapply(strsplit(rn,split="_"),"[",2)))
 end <- as.numeric(unlist(lapply(strsplit(rn,split="_"),"[",3)))
 gr <- GRanges(seqnames=sn, ranges=IRanges(start, end), strand="*", mcols=data.frame(peakID=rn))
-ff <- FaFile("~/data/genomes/human/Homo_sapiens.GRCh37.75.dna_sm.primary_assembly.fa")
+ff <- FaFile("~/data/genomes/human/Homo_sapiens.GRCh37.75.dna.primary_assembly.fa.gz")
 peakSeqs <- getSeq(x=ff, gr)
 gcContentPeaks <- letterFrequency(peakSeqs, "GC",as.prob=TRUE)[,1]
 gcGroups <- Hmisc::cut2(gcContentPeaks, g=20)
@@ -92,7 +92,7 @@ for(cc in 1:nlevels(celltype)){
   curBatch <- batch[id]
   plot(x=seq(min(gcContentPeaks), max(gcContentPeaks), length=10),
      y=seq(0, 4, length=10), type='n',
-     xlab="GC-content", ylab="Log(count + 1)", main=curCT)
+     xlab="GC-content", ylab="log(count + 1)", main=curCT)
   for(ii in 1:length(id)){
     curID <- id[ii]
     oo <- order(lowListGC[[curID]]$x)
@@ -105,7 +105,7 @@ for(bb in 1:nlevels(batch)){
   id <- which(batch == curB)
   plot(x=seq(min(gcContentPeaks), max(gcContentPeaks), length=10),
      y=seq(0, 4, length=10), type='n',
-     xlab="GC-content", ylab="Log(count + 1)", main=curB)
+     xlab="GC-content", ylab="log(count + 1)", main=curB)
   for(ii in 1:length(id)){
     curID <- id[ii]
     oo <- order(lowListGC[[curID]]$x)
@@ -138,7 +138,7 @@ plotGCHex(gr, rowMeans(counts[, celltype == "Memory_NK"])) +
 p1 <- ggplot(dfAll, aes(x=x, y=y, group=sample, color=sample)) +
   geom_line(size = 1) +
   xlab("GC-content") +
-  ylab("Log(count + 1)") +
+  ylab("log(count + 1)") +
   theme_classic()
 #  rm(lowListGC) ; gc()
 
@@ -160,7 +160,7 @@ for(cc in 1:nlevels(celltype)){
   pCT <- ggplot(dfAll, aes(x=x, y=y, group=sample, color=sample)) +
     geom_line(size = 1) +
     xlab("GC-content") +
-    ylab("Log(count + 1)") +
+    ylab("log(count + 1)") +
     theme_classic() +
     ggtitle(curCT) +
     theme(legend.position = "none") +
@@ -188,7 +188,7 @@ for(kk in 1:ncol(counts)){
 
 plot(x=seq(min(log(width(gr))), max(log(width(gr))), length=10),
      y=seq(0, 5, length=10), type='n',
-     xlab="GC-content", ylab="Log(count + 1)")
+     xlab="GC-content", ylab="log(count + 1)")
 for(kk in 1:length(lowListWidth)){
   oo <- order(lowListWidth[[kk]]$x)
   lines(x=lowListWidth[[kk]]$x[oo], y=lowListWidth[[kk]]$y[oo], col=colsBig[kk])
@@ -211,7 +211,7 @@ for(cc in 1:nlevels(celltype)){
   pCT <- ggplot(dfAll, aes(x=x, y=y, group=sample, color=sample)) +
     geom_line(size = 1) +
     xlab("Log peak width") +
-    ylab("Log(count + 1)") +
+    ylab("log(count + 1)") +
     theme_classic() +
     ggtitle(curCT) +
     theme(legend.position = "none") +
@@ -244,6 +244,7 @@ countsMemControl <- countsMemControl[keepMemContr, ]
 table(droplevels(batch[memContID]))
 # equally sized bins after filtering
 gcGroupsMem <- Hmisc::cut2(gcContentPeaks[keepMemContr], g=20)
+gcGroupsMem10 <- Hmisc::cut2(gcContentPeaks[keepMemContr], g=10)
 gcMem <- gcContentPeaks[keepMemContr]
 
 set.seed(33)
@@ -439,27 +440,25 @@ pGCQN <- ggplot(dfGCQN) +
 ## ridges plot before normalization
 countsN <- countsMemControl[,order(colSums(countsMemControl), decreasing=TRUE)[1:3]]
 
-for(ii in 1:ncol(countsN)){
-  lc <- log1p(countsN[,ii])
-  joyDat <- data.frame(lc=lc, gc=gcGroupsMem)
-  xLab <- base::ifelse(ii==2, "Log(count + 1)"," ")
-  yLab <- base::ifelse(ii==1, "GC-content bin"," ")
-  # axText <- ifelse(ii==1, 14, 0)
-  axText <- 0
-  ridgeHlp <- joyDat %>% ggplot(aes(y=gc)) + 
-    geom_density_ridges(aes(x=lc)) + 
-    theme_ridges(grid=FALSE, font_size=5, center_axis_labels = TRUE) + 
-    xlim(c(0.5,7)) +
-    xlab(xLab) +
-    ylab(yLab) +
-    theme(axis.text.y = element_text(size=axText),
-          axis.text.x = element_text(size=10),
-          legend.position = "none",
-          axis.title = element_text(size=16))
-  assign(paste0("ridge",ii), ridgeHlp)
-}
-pRidge1 <- grid.arrange(ridge1,ridge2,ridge3, nrow=1)
 
+lc <- log1p(c(countsN))
+joyDat <- data.frame(lc=lc, 
+                     gc=rep(gcGroupsMem10, 3),
+                     sample=rep(1:3, each=nrow(countsN)))
+axText <- 0
+pRidge1 <- joyDat %>% ggplot(aes(y=gc)) + 
+  geom_density_ridges(aes(x=lc)) + 
+  facet_wrap(.~sample) +
+  theme_ridges(grid=FALSE, font_size=5, center_axis_labels = TRUE) + 
+  xlim(c(0.5,7)) +
+  xlab("log(count + 1)") +
+  ylab("GC-content bin") +
+  theme(axis.text.y = element_text(size=axText),
+        axis.text.x = element_text(size=10),
+        legend.position = "none",
+        axis.title = element_text(size=16), 
+             strip.background = element_blank(),
+             strip.text.x = element_blank())
 
 pFC <- cowplot::plot_grid(pCqn, pEDASeq, pGCQN,
                           labels=letters[2:4],
@@ -471,8 +470,6 @@ pFig2 <- cowplot::plot_grid(pRidge1,
 pFig2
 ggsave("~/Dropbox/research/atacseq/bulk/plots/figure2.png",
        units="in", width=12, height=9)
-
 ```
-
 
 
