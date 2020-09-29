@@ -339,17 +339,6 @@ evaluateSimulation <- function(simCounts, simGC, simWidth, design, deId, grSim, 
   ruvgCounts <- ruvRes$normalizedCounts
   cpmRUV <- edgeR::cpm(ruvgCounts, normalized.lib.sizes=FALSE, log=TRUE, prior.count=0.25)
   
-  ## RUVs
-  # scid <- matrix(c(which(design[,2] == 0),
-  #          which(design[,2] == 1)),
-  #        nrow=2, ncol=nSamples/2, byrow=TRUE)
-  # ruvsRes <- RUVs(as.matrix(simCounts), 
-  #                 cIdx = 1:nrow(simCounts),
-  #                 scIdx = scid,
-  #                 k=2)
-  # ruvsCounts <- ruvsRes$normalizedCounts
-
-  
   
   # TMM
   resTMM <- testEdgeR(simCounts, design, tmm=TRUE)
@@ -417,7 +406,6 @@ simulateAndEvaluate <- function(seed, nTotal, inputCounts, grp, nDE, meanlog=0.8
   delta <- rep(0, nrow(inputCounts))
   sign <- rep(c(1,-1), each=nDE/2)
   if(length(sign) != nDE) sign <- c(sign,1)
-  # delta[deId] <- sign*log(rlnorm(n=1e4, meanlog=3, sdlog=1.2))
   delta[deId] <- sign*log(rlnorm(n=nDE, meanlog=meanlog, sdlog=sdlog))
   hist(delta[deId],  breaks=40)
   
@@ -462,7 +450,7 @@ simulateAndEvaluate <- function(seed, nTotal, inputCounts, grp, nDE, meanlog=0.8
 ```
 
 
-## Iterate small effect sizes, n=20
+## Iterate small effect sizes
 
 ```{r}
 nDEParams <- round(nrow(countsTFilt)/c(10,4))

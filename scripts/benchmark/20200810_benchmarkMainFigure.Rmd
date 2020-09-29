@@ -25,7 +25,7 @@ rmMethods <- c("gcqn_mean", "gcqn_median_10", "gcqn_median_20",  "gcqn_median_10
 # Full evaluation
 
 ```{r}
-filesDir <- "objects/"
+filesDir <- "../../objects/"
 library(ggplot2)
 files <- list.files(filesDir,
                     pattern = "*scores.rds$")
@@ -74,7 +74,7 @@ scoreDfOrdered0 <- scoreDf0
 scoreDfOrdered0$methodShort <- factor(scoreDfOrdered0$methodShort, levels=orderedMethodShort0)
 pFull <- ggplot(scoreDfOrdered0, aes(y=methodShort, x=dataset, fill=scaledRank)) + 
   geom_tile() + 
-  scale_fill_gradientn(colours = pal, name = 'Scaled Scone\nrank') +
+  scale_fill_gradientn(colours = pal, name = 'Scaled Scone\nrank', limits=c(-3,2.5)) +
   ggtitle("Full evaluation") +
   ylab("") + xlab("Dataset") +
   theme(axis.text.x = element_text(angle = 30, vjust= 0.7, size=9),
@@ -86,7 +86,7 @@ pFull <- ggplot(scoreDfOrdered0, aes(y=methodShort, x=dataset, fill=scaledRank))
 # Permuted GC-content
 
 ```{r}
-filesDir <- "objects/"
+filesDir <- "../../objects/"
 library(ggplot2)
 files <- list.files(filesDir,
                     pattern = "*scores_permuted.rds$")
@@ -135,7 +135,7 @@ scoreDfOrdered0 <- scoreDf0
 scoreDfOrdered0$methodShort <- factor(scoreDfOrdered0$methodShort, levels=orderedMethodShort0)
 pPermuted <- ggplot(scoreDfOrdered0, aes(y=methodShort, x=dataset, fill=scaledRank)) + 
   geom_tile() + 
-  scale_fill_gradientn(colours = pal, name = 'Scaled Scone\nrank') +
+  scale_fill_gradientn(colours = pal, name = 'Scaled Scone\nrank', limits=c(-3,2.5)) +
   ggtitle("Permuted GC-content") +
   ylab("") + xlab("Dataset") +
   theme(axis.text.x = element_text(angle = 30, vjust= 0.7, size=9),
@@ -147,7 +147,7 @@ pPermuted <- ggplot(scoreDfOrdered0, aes(y=methodShort, x=dataset, fill=scaledRa
 # No GC evaluation measures
 
 ```{r}
-filesDir <- "objects/"
+filesDir <- "../../objects/"
 library(ggplot2)
 files <- list.files(filesDir,
                     pattern = "*scores.rds$")
@@ -197,7 +197,7 @@ scoreDfOrdered0 <- scoreDf0
 scoreDfOrdered0$methodShort <- factor(scoreDfOrdered0$methodShort, levels=orderedMethodShort0)
 p_noGC <- ggplot(scoreDfOrdered0, aes(y=methodShort, x=dataset, fill=scaledRank)) + 
   geom_tile() + 
-  scale_fill_gradientn(colours = pal, name = 'Scaled Scone\nrank') +
+  scale_fill_gradientn(colours = pal, name = 'Scaled Scone\nrank', limits=c(-3,2.5)) +
   ggtitle("No GC-content evaluation measures") +
   ylab("") + xlab("Dataset") +
   theme(axis.text.x = element_text(angle = 30, vjust= 0.7, size=9),
@@ -209,7 +209,7 @@ p_noGC <- ggplot(scoreDfOrdered0, aes(y=methodShort, x=dataset, fill=scaledRank)
 # No RLE evaluation measures
 
 ```{r}
-filesDir <- "objects/"
+filesDir <- "../../objects/"
 library(ggplot2)
 files <- list.files(filesDir,
                     pattern = "*scores.rds$")
@@ -259,7 +259,7 @@ scoreDfOrdered0 <- scoreDf0
 scoreDfOrdered0$methodShort <- factor(scoreDfOrdered0$methodShort, levels=orderedMethodShort0)
 p_noRLE <- ggplot(scoreDfOrdered0, aes(y=methodShort, x=dataset, fill=scaledRank)) + 
   geom_tile() + 
-  scale_fill_gradientn(colours = pal, name = 'Scaled Scone\nrank') +
+  scale_fill_gradientn(colours = pal, name = 'Scaled Scone\nrank', limits=c(-3,2.5)) +
   ggtitle("No RLE measures") +
   ylab("") + xlab("Dataset") +
   theme(axis.text.x = element_text(angle = 30, vjust= 0.7, size=9),

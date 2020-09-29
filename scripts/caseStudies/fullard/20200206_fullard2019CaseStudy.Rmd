@@ -70,7 +70,7 @@ gr <- GRanges(seqnames=sn, ranges = IRanges(start=start, end=end), strand="*")
 names(gr) <- peaks$name
 
 # get GC content
-ff <- FaFile("~/data/genomes/human/Homo_sapiens.GRCh37.75.dna_sm.primary_assembly.fa")
+ff <- FaFile("~/data/genomes/human/Homo_sapiens.GRCh37.75.dna_sm.primary_assembly.fa.gz")
 peakSeqs <- getSeq(x=ff, gr)
 gcContentPeaks <- letterFrequency(peakSeqs, "GC",as.prob=TRUE)[,1]
 gcGroups <- Hmisc::cut2(gcContentPeaks, g=20)
@@ -574,7 +574,21 @@ cols <- wesanderson::wes_palette("Zissou1", n=10, type="continuous")
 pcaAriPlots <- cowplot::plot_grid(pcaPlots[["EDASeq"]] + ggtitle("") + labs(colour="Region", shape="Cell type") + coord_fixed(), 
                                   ariRegion + scale_color_viridis_d(),
                                   nrow=2, ncol=1, labels=c("a", "b"))
-maPlots <- cowplot::plot_grid(plotlist=pListHex[c("edgeR", "FQ", "FQ-FQ", "cqn")],
+# fix scales
+maList <- list(pListHex[["edgeR"]] + 
+                 ylim(c(-5, 5)) + 
+                 xlim(c(-2, 8)),
+               pListHex[["FQ"]] + 
+                 ylim(c(-5, 5)) + 
+                 xlim(c(-2, 8)),
+               pListHex[["FQ-FQ"]] + 
+                 ylim(c(-5, 5)) + 
+                 xlim(c(-2, 8)),
+               pListHex[["cqn"]] + 
+                 ylim(c(-5, 5)) + 
+                 xlim(c(-2, 8)))
+  
+maPlots <- cowplot::plot_grid(plotlist=maList,
                      nrow=2, ncol=2)
 
 cowplot::plot_grid(pcaAriPlots,
