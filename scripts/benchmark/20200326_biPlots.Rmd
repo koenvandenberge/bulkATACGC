@@ -21,8 +21,7 @@ rmMethods <- c("gcqn_mean", "gcqn_median_10", "gcqn_median_20",  "gcqn_median_10
 
 library(ggplot2)
 library(scone)
-#filesDir <- "../../objects/"
-filesDir <- "objects/"
+filesDir <- "../../objects/"
 files <- list.files(filesDir,
                     pattern = "*scores.rds$")
 datasets <- unlist(lapply(strsplit(files, split="_"),"[[",1))
