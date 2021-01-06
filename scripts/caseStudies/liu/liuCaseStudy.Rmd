@@ -291,7 +291,7 @@ for(ii in 1:length(resList)){
 }
 # dev.off()
 
-### check distribution of GC-content for top 1000 peaks.
+### check distribution of GC-content for top 5000 peaks.
 # pdf("~/Dropbox/research/atacseq/bulk/plots/liu_topPeaks.pdf", width=8)
 mypar(mfrow=c(3,3))
 for(ii in 1:length(resList)){
@@ -326,7 +326,7 @@ nrPeaks
 
 # all significant peaks: relative
 # pdf("~/Dropbox/research/atacseq/bulk/plots/liu_relnrPeaks.pdf", width=8)
-mypar(mfrow=c(3,3), mar=c(4,4,2,1), bty='l', las=2, cex.axis=3/2, cex.lab=3/2, cex.main=2)
+mypar(mfrow=c(3,3), mar=c(4,4,3.5,1), bty='l', las=2, cex.axis=3/2, cex.lab=3/2, cex.main=3/2)
 for(ii in 1:length(resList)){
   tab <- resList[[ii]]
   if(ii == 2){
@@ -337,7 +337,8 @@ for(ii in 1:length(resList)){
     sigPeaks <- which(p.adjust(tab$table$PValue, "fdr") <= 0.05)
   }
   
-  barplot(table(gcGroups[sigPeaks]) / table(gcGroups[sigPeaks])[1], ylim=c(0,4), main=names(resList)[ii],xaxt="n", yaxt='n', xlab="GC-content bin")
+  barplot(table(gcGroups[sigPeaks]) / table(gcGroups[sigPeaks])[1], ylim=c(0,4), main=paste0(names(resList)[ii],": \n ~", round(nrPeaks[ii]/1e3),"k DA peaks"),
+          xaxt="n", yaxt='n', xlab="GC-content bin")
   axis(side=2, at=c(0,1,2,3))
   title(ylab="Relative # peaks", line=1.3, cex.lab=3/2)
   abline(h=1, col="red", lwd=2, lty=2)

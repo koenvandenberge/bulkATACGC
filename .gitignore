@@ -7,4 +7,6 @@ scripts/caseStudies/calderon/*.pdf
 scripts/caseStudies/calderon/*.rds
 scripts/caseStudies/protocolData/*.rds
 scripts/caseStudies/protocolData/*.pdf
+scoresComputation*
+simulationProcedure*
 scripts/caseStudies/fullard/20200206_fullard2019CaseStudy_links*
