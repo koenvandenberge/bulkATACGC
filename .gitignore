@@ -1,4 +1,5 @@
 data/
+data.zip
 .Rproj.user
 scripts/caseStudies/liu/resList.rds
 scripts/caseStudies/fullard/lrtOut2.rds
