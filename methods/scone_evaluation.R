@@ -209,7 +209,9 @@ sconeEvaluation <- function(counts, bio, qc=NULL, batch=NULL, negcon, gcContent,
                     k_ruv = k_ruv, 
                     k_qc=k_qc,
                     adjust_bio=adjust_bio,
-                    eval_kclust=eval_kclust, ...)
+                    eval_kclust=eval_kclust,
+                    stratified_pam = TRUE,
+                    ...)
   return(my_scone)
 }
 

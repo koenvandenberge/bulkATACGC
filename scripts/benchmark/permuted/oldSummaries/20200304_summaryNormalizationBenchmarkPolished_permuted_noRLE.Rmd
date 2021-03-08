@@ -1,0 +1,304 @@
+---
+title: "ATAC-seq normalization summary, polished, permuted GC content, no RLE"
+author: "Koen Van den Berge"
+date: "12/12/2019"
+output: html_document
+---
+
+This script only removes a few methods from the benchmark that are used for other purposes, e.g. robustness benchmarks. 
+
+```{r}
+getMeanScoreRank <- function(scores){
+  scoreT <- t(scores)
+  ranked_scores <- apply(scoreT,1,rank)
+  mean_score_rank <- rowMeans(ranked_scores)
+  mean_score_rank <- mean_score_rank[order(mean_score_rank, decreasing=TRUE)]
+  return(mean_score_rank)
+}
+
+rmMethods <- c("gcqn_mean", "gcqn_median_10", "gcqn_median_20",  "gcqn_median_100",
+               "gcqn_median_permuted")
+
+library(ggplot2)
+files <- list.files("~/Dropbox/research/atacseq/bulk/analysis/benchmarkNormalization/permuted/",
+                    pattern = "*scores_permuted.rds$")
+datasets <- unlist(lapply(strsplit(files, split="_"),"[[",1))
+scores <- sapply(1:length(files), function(ii) readRDS(files[ii]))
+# remove other methods
+scores <- lapply(scores, function(scoreMat){
+  scoreNames <- rownames(scoreMat)
+  rmID <- unlist(sapply(rmMethods, function(method){
+    grep(x=scoreNames, pattern=method)
+  }))
+  return(scoreMat[-rmID,])
+})
+scores <- lapply(scores, function(x) x[,!colnames(x) %in% c("RLE_MED","RLE_IQR","rleGC_med","rleGC_iqr")])
+scoreRanks <- lapply(scores, getMeanScoreRank)
+rankVector <- do.call(c,scoreRanks)
+scoreDfLong <- data.frame(method=names(rankVector),
+                          dataset=unlist(mapply(rep,datasets,unlist(lapply(scoreRanks,length)))),
+                          rank=rankVector)
+
+# scoreVector <- do.call(c, scores)
+# rankVector <- unlist(lapply(scores, rank))
+# scoreDfLong <- data.frame(score=scoreVector,
+#                           method=names(scoreVector),
+#                           dataset=unlist(mapply(rep,datasets,unlist(lapply(scores,length)))),
+#                           rank=rankVector)
+
+
+
+
+pal <- wesanderson::wes_palette("Zissou1", n=40, type="continuous")
+ggplot(scoreDfLong, aes(y=method, x=dataset, fill=rank)) + 
+  geom_tile() + 
+  scale_fill_gradientn(colours = pal, name = 'Scone rank')
+```
+
+
+# Order by average rank
+
+```{r}
+library(dplyr)
+rankAv <- scoreDfLong %>% group_by(method) %>% summarize(avgRank=mean(rank, na.rm=TRUE))
+oo <- order(rankAv$avgRank, decreasing=TRUE)
+orderedMethods <- rankAv$method[oo]
+
+
+scoreDfOrdered <- scoreDfLong
+scoreDfOrdered$method <- factor(scoreDfOrdered$method, levels=orderedMethods)
+ggplot(scoreDfOrdered, aes(y=method, x=dataset, fill=rank)) + 
+  geom_tile() + 
+  scale_fill_gradientn(colours = pal, name = 'Scone rank')
+```
+
+
+# Conditional on the dimension of unwanted variation latent variables: what performs best?
+
+Here we stratify performances based on the number of estimated unwanted variation variables that was adjusted for after the normalization.
+
+Since different methods have different domains in terms of the ranking, we scale the ranks within each dataset before taking the average.
+
+
+## No latent variables
+
+```{r}
+id0 <- grep(x=scoreDfLong$method, pattern="no_uv")
+scoreDf0 <- scoreDfLong[id0,]
+scoreDf0$methodShort <- unlist(lapply(strsplit(as.character(scoreDf0$method), split=","), "[[", 2))
+scoreDf0$methodShort[scoreDf0$methodShort == "gcqn_median_50"] <- "GC-QN"
+scoreDf0$methodShort[scoreDf0$methodShort == "edaseq"] <- "EDASeq"
+scoreDf0$methodShort[scoreDf0$methodShort == "gcqn_smooth"] <- "GC-QN_smooth"
+scoreDf0$methodShort[scoreDf0$methodShort == "fq"] <- "FQ"
+scoreDf0$methodShort[scoreDf0$methodShort == "tmm"] <- "TMM"
+scoreDf0$methodShort[scoreDf0$methodShort == "deseq"] <- "DESeq2"
+scoreDf0$methodShort[scoreDf0$methodShort == "uq"] <- "UQ"
+scoreDf0$methodShort[scoreDf0$methodShort == "none"] <- "None"
+scoreDf0$methodShort[scoreDf0$methodShort == "sum"] <- "Sum"
+scoreDf0$methodShort <- factor(scoreDf0$methodShort)
+
+## scale ranks
+scoreDf0 <- scoreDf0 %>% group_by(dataset) %>% mutate(scaledRank=scale(rank))
+
+## take average of scaled ranks
+avRank0 <- scoreDf0 %>% group_by(methodShort) %>% summarize(avRank=mean(scaledRank))
+oo0 <- order(avRank0$avRank, decreasing=TRUE)
+orderedMethodShort0 <- avRank0$methodShort[oo0]
+
+scoreDfOrdered0 <- scoreDf0
+scoreDfOrdered0$methodShort <- factor(scoreDfOrdered0$methodShort, levels=orderedMethodShort0)
+ggplot(scoreDfOrdered0, aes(y=methodShort, x=dataset, fill=scaledRank)) + 
+  geom_tile() + 
+  scale_fill_gradientn(colours = pal, name = 'Scaled Scone\nrank') +
+  ggtitle("Without RUV variables") +
+  ylab("") + xlab("Dataset") +
+  theme(axis.text.x = element_text(angle = 30, vjust= 0.7, size=9),
+        axis.text.y = element_text(size=9))
+ggsave("~/Dropbox/research/atacseq/bulk/plots/benchmark_noRUV_permuted_noRLE.pdf")
+```
+
+## One latent variable
+
+```{r}
+id1 <- grep(x=scoreDfLong$method, pattern="ruv_k=1")
+scoreDf1 <- scoreDfLong[id1,]
+scoreDf1$methodShort <- unlist(lapply(strsplit(as.character(scoreDf1$method), split=","), "[[", 2))
+scoreDf1$methodShort[scoreDf1$methodShort == "gcqn_median_50"] <- "GC-QN"
+scoreDf1$methodShort[scoreDf1$methodShort == "edaseq"] <- "EDASeq"
+scoreDf1$methodShort[scoreDf1$methodShort == "gcqn_smooth"] <- "GC-QN_smooth"
+scoreDf1$methodShort[scoreDf1$methodShort == "fq"] <- "FQ"
+scoreDf1$methodShort[scoreDf1$methodShort == "tmm"] <- "TMM"
+scoreDf1$methodShort[scoreDf1$methodShort == "deseq"] <- "DESeq2"
+scoreDf1$methodShort[scoreDf1$methodShort == "uq"] <- "UQ"
+scoreDf1$methodShort[scoreDf1$methodShort == "none"] <- "None"
+scoreDf1$methodShort[scoreDf1$methodShort == "sum"] <- "Sum"
+scoreDf1$methodShort <- factor(scoreDf1$methodShort)
+
+## scale ranks
+scoreDf1 <- scoreDf1 %>% group_by(dataset) %>% mutate(scaledRank=scale(rank))
+
+avRank1 <- scoreDf1 %>% group_by(methodShort) %>% summarize(avRank=mean(scaledRank))
+oo1 <- order(avRank1$avRank, decreasing=TRUE)
+orderedMethodShort1 <- avRank1$methodShort[oo1]
+
+scoreDfOrdered1 <- scoreDf1
+scoreDfOrdered1$methodShort <- factor(scoreDfOrdered1$methodShort, levels=orderedMethodShort1)
+ggplot(scoreDfOrdered1, aes(y=methodShort, x=dataset, fill=scaledRank)) + 
+  geom_tile() + 
+  scale_fill_gradientn(colours = pal, name = 'Scaled Scone\nrank') +
+  ggtitle("One RUV variable") +
+  ylab("") + xlab("Dataset") +
+  theme(axis.text.x = element_text(angle = 30, vjust= 0.7, size=9),
+        axis.text.y = element_text(size=9))
+ggsave("~/Dropbox/research/atacseq/bulk/plots/benchmark_RUV1_permuted_noRLE.pdf")
+```
+
+## Two latent variables
+
+```{r}
+id2 <- grep(x=scoreDfLong$method, pattern="ruv_k=2")
+scoreDf2 <- scoreDfLong[id2,]
+scoreDf2$methodShort <- unlist(lapply(strsplit(as.character(scoreDf2$method), split=","), "[[", 2))
+scoreDf2$methodShort[scoreDf2$methodShort == "gcqn_median_50"] <- "GC-QN"
+scoreDf2$methodShort[scoreDf2$methodShort == "edaseq"] <- "EDASeq"
+scoreDf2$methodShort[scoreDf2$methodShort == "gcqn_smooth"] <- "GC-QN_smooth"
+scoreDf2$methodShort[scoreDf2$methodShort == "fq"] <- "FQ"
+scoreDf2$methodShort[scoreDf2$methodShort == "tmm"] <- "TMM"
+scoreDf2$methodShort[scoreDf2$methodShort == "deseq"] <- "DESeq2"
+scoreDf2$methodShort[scoreDf2$methodShort == "uq"] <- "UQ"
+scoreDf2$methodShort[scoreDf2$methodShort == "none"] <- "None"
+scoreDf2$methodShort[scoreDf2$methodShort == "sum"] <- "Sum"
+scoreDf2$methodShort <- factor(scoreDf2$methodShort)
+
+## scale ranks
+scoreDf2 <- scoreDf2 %>% group_by(dataset) %>% mutate(scaledRank=scale(rank))
+
+avRank2 <- scoreDf2 %>% group_by(methodShort) %>% summarize(avRank=mean(scaledRank))
+oo2 <- order(avRank2$avRank, decreasing=TRUE)
+orderedMethodShort2 <- avRank2$methodShort[oo2]
+
+scoreDfOrdered2 <- scoreDf2
+scoreDfOrdered2$methodShort <- factor(scoreDfOrdered2$methodShort, levels=orderedMethodShort2)
+ggplot(scoreDfOrdered2, aes(y=methodShort, x=dataset, fill=scaledRank)) + 
+  geom_tile() + 
+  scale_fill_gradientn(colours = pal, name = 'Scaled Scone\nrank') +
+  ggtitle("Two RUV variables") +
+  ylab("") + xlab("Dataset") +
+  theme(axis.text.x = element_text(angle = 30, vjust= 0.7, size=9),
+        axis.text.y = element_text(size=9))
+ggsave("~/Dropbox/research/atacseq/bulk/plots/benchmark_RUV2_permuted_noRLE.pdf")
+```
+
+## Three latent variables
+
+```{r}
+id3 <- grep(x=scoreDfLong$method, pattern="ruv_k=3")
+scoreDf3 <- scoreDfLong[id3,]
+scoreDf3$methodShort <- unlist(lapply(strsplit(as.character(scoreDf3$method), split=","), "[[", 2))
+scoreDf3$methodShort[scoreDf3$methodShort == "gcqn_median_50"] <- "GC-QN"
+scoreDf3$methodShort[scoreDf3$methodShort == "edaseq"] <- "EDASeq"
+scoreDf3$methodShort[scoreDf3$methodShort == "gcqn_smooth"] <- "GC-QN_smooth"
+scoreDf3$methodShort[scoreDf3$methodShort == "fq"] <- "FQ"
+scoreDf3$methodShort[scoreDf3$methodShort == "tmm"] <- "TMM"
+scoreDf3$methodShort[scoreDf3$methodShort == "deseq"] <- "DESeq2"
+scoreDf3$methodShort[scoreDf3$methodShort == "uq"] <- "UQ"
+scoreDf3$methodShort[scoreDf3$methodShort == "none"] <- "None"
+scoreDf3$methodShort[scoreDf3$methodShort == "sum"] <- "Sum"
+scoreDf3$methodShort <- factor(scoreDf3$methodShort)
+
+## scale ranks
+scoreDf3 <- scoreDf3 %>% group_by(dataset) %>% mutate(scaledRank=scale(rank))
+
+avRank3 <- scoreDf3 %>% group_by(methodShort) %>% summarize(avRank=mean(scaledRank))
+oo3 <- order(avRank3$avRank, decreasing=TRUE)
+orderedMethodShort3 <- avRank3$methodShort[oo3]
+
+scoreDfOrdered3 <- scoreDf3
+scoreDfOrdered3$methodShort <- factor(scoreDfOrdered3$methodShort, levels=orderedMethodShort3)
+ggplot(scoreDfOrdered3, aes(y=methodShort, x=dataset, fill=scaledRank)) + 
+  geom_tile() + 
+  scale_fill_gradientn(colours = pal, name = 'Scaled Scone\nrank') +
+  ggtitle("Three RUV variables") +
+  ylab("") + xlab("Dataset") +
+  theme(axis.text.x = element_text(angle = 30, vjust= 0.7, size=9),
+        axis.text.y = element_text(size=9))
+ggsave("~/Dropbox/research/atacseq/bulk/plots/benchmark_RUV3_permuted_noRLE.pdf")
+
+```
+
+## Four latent variables
+
+```{r}
+id4 <- grep(x=scoreDfLong$method, pattern="ruv_k=4")
+scoreDf4 <- scoreDfLong[id4,]
+scoreDf4$methodShort <- unlist(lapply(strsplit(as.character(scoreDf4$method), split=","), "[[", 2))
+scoreDf4$methodShort[scoreDf4$methodShort == "gcqn_median_50"] <- "GC-QN"
+scoreDf4$methodShort[scoreDf4$methodShort == "edaseq"] <- "EDASeq"
+scoreDf4$methodShort[scoreDf4$methodShort == "gcqn_smooth"] <- "GC-QN_smooth"
+scoreDf4$methodShort[scoreDf4$methodShort == "fq"] <- "FQ"
+scoreDf4$methodShort[scoreDf4$methodShort == "tmm"] <- "TMM"
+scoreDf4$methodShort[scoreDf4$methodShort == "deseq"] <- "DESeq2"
+scoreDf4$methodShort[scoreDf4$methodShort == "uq"] <- "UQ"
+scoreDf4$methodShort[scoreDf4$methodShort == "none"] <- "None"
+scoreDf4$methodShort[scoreDf4$methodShort == "sum"] <- "Sum"
+scoreDf4$methodShort <- factor(scoreDf4$methodShort)
+
+## scale ranks
+scoreDf4 <- scoreDf4 %>% group_by(dataset) %>% mutate(scaledRank=scale(rank))
+
+avRank4 <- scoreDf4 %>% group_by(methodShort) %>% summarize(avRank=mean(scaledRank))
+oo4 <- order(avRank4$avRank, decreasing=TRUE)
+orderedMethodShort4 <- avRank4$methodShort[oo4]
+
+scoreDfOrdered4 <- scoreDf4
+scoreDfOrdered4$methodShort <- factor(scoreDfOrdered4$methodShort, levels=orderedMethodShort4)
+ggplot(scoreDfOrdered4, aes(y=methodShort, x=dataset, fill=scaledRank)) + 
+  geom_tile() + 
+  scale_fill_gradientn(colours = pal, name = 'Scaled Scone\nrank') +
+  ggtitle("Four RUV variables") +
+  ylab("") + xlab("Dataset") +
+  theme(axis.text.x = element_text(angle = 30, vjust= 0.7, size=9),
+        axis.text.y = element_text(size=9))
+ggsave("~/Dropbox/research/atacseq/bulk/plots/benchmark_RUV4_permuted_noRLE.pdf")
+
+```
+
+## Five latent variables
+
+```{r}
+id5 <- grep(x=scoreDfLong$method, pattern="ruv_k=5")
+scoreDf5 <- scoreDfLong[id5,]
+scoreDf5$methodShort <- unlist(lapply(strsplit(as.character(scoreDf5$method), split=","), "[[", 2))
+scoreDf5$methodShort[scoreDf5$methodShort == "gcqn_median_50"] <- "GC-QN"
+scoreDf5$methodShort[scoreDf5$methodShort == "edaseq"] <- "EDASeq"
+scoreDf5$methodShort[scoreDf5$methodShort == "gcqn_smooth"] <- "GC-QN_smooth"
+scoreDf5$methodShort[scoreDf5$methodShort == "fq"] <- "FQ"
+scoreDf5$methodShort[scoreDf5$methodShort == "tmm"] <- "TMM"
+scoreDf5$methodShort[scoreDf5$methodShort == "deseq"] <- "DESeq2"
+scoreDf5$methodShort[scoreDf5$methodShort == "uq"] <- "UQ"
+scoreDf5$methodShort[scoreDf5$methodShort == "none"] <- "None"
+scoreDf5$methodShort[scoreDf5$methodShort == "sum"] <- "Sum"
+scoreDf5$methodShort <- factor(scoreDf5$methodShort)
+
+## scale ranks
+scoreDf5 <- scoreDf5 %>% group_by(dataset) %>% mutate(scaledRank=scale(rank))
+
+avRank5 <- scoreDf5 %>% group_by(methodShort) %>% summarize(avRank=mean(scaledRank))
+oo5 <- order(avRank5$avRank, decreasing=TRUE)
+orderedMethodShort5 <- avRank5$methodShort[oo5]
+
+scoreDfOrdered5 <- scoreDf5
+scoreDfOrdered5$methodShort <- factor(scoreDfOrdered5$methodShort, levels=orderedMethodShort5)
+ggplot(scoreDfOrdered5, aes(y=methodShort, x=dataset, fill=scaledRank)) + 
+  geom_tile() + 
+  scale_fill_gradientn(colours = pal, name = 'Scaled Scone\nrank') +
+  ggtitle("Five RUV variables") +
+  ylab("") + xlab("Dataset") +
+  theme(axis.text.x = element_text(angle = 30, vjust= 0.7, size=9),
+        axis.text.y = element_text(size=9))
+ggsave("~/Dropbox/research/atacseq/bulk/plots/benchmark_RUV5_permuted_noRLE.pdf")
+```
+
+
+
+

@@ -1,0 +1,213 @@
+---
+title: "Liu 2019 ATAC-seq mouse tissue atlas"
+author: "Koen Van den Berge"
+date: "11/27/2019"
+output: html_document
+---
+
+
+```{r}
+library(GenomicAlignments)
+library(edgeR)
+library(UpSetR)
+library(rafalib)
+library(tidyverse)
+library(ggridges)
+library(tidyr)
+library(quantro)
+library(qsmooth)
+library(RUVSeq)
+library(scone)
+library(rhdf5)
+
+ridgesPlot <- function(counts, gcGroups){
+  #logcounts <- log1p(counts)
+  logcounts <- as.data.frame(edgeR::cpm(counts, log=TRUE))
+  logcountsLong <- gather(logcounts)
+  dat <- data.frame(logcountsLong, gc=rep(gcGroups, ncol(counts)))
+  print(dat %>% ggplot(aes(y=gc)) + geom_density_ridges(aes(x=value, fill=key, alpha=.2)) + theme_ridges(grid=FALSE))
+}
+
+runEdgeR <- function(counts, design, tmm=TRUE, offset=NULL){
+  d <- DGEList(counts)
+  if(!is.null(offset)) d$offset <- offset
+  if(tmm){
+      d <- calcNormFactors(d) 
+    } else {
+      d$samples$lib.size = 1
+  }
+  d <- estimateDisp(d,design)
+  fit <- glmFit(d, design)
+  return(fit)
+}
+fcBoxplots <- function(fit, gcGroups){
+  mypar(mfrow=c(3,2))
+  for(ii in 2:ncol(fit$coefficients)){
+    boxplot(fit$coefficients[,ii]~gcGroups,
+         ylim=c(-1,1)) ; abline(h=0, col="red", lwd=2)
+    df <- data.frame(beta=fit$coefficients[,ii], gcl=gcGroups)
+  hlp <- df %>% group_by(gcl) %>% summarize(betaMean=mean(beta))
+  lines(x=1:nlevels(gcGroups), y=hlp$betaMean,
+        col="orange" , type="b", lwd=2)
+  }
+  mypar(mfrow=c(1,1))
+}
+
+plotCountMatrices <- function(mat1, mat2, gcGroups, ...){
+  pal <- wesanderson::wes_palette("Zissou1", n=20, type="continuous")
+  plot(x=unlist(c(mat1+1)), 
+     y=unlist(c(mat2+1)),
+     pch=16, cex=1/2,
+     col=pal[gcGroups],
+     ...) ; 
+  abline(0,1, col="red")
+}
+
+
+counts <- read.table("~/data/atac/liu2019_atlas/ATACseq_Matrix/chromatin.accessibility.raw.count.txt", header=TRUE, stringsAsFactors = FALSE)
+
+```
+
+```{r}
+peakNames <- as.character(counts[,1])
+peakNamesSplit <- strsplit(peakNames, split="_")
+# remove peaks in random chromosomes
+rmPeaks <- which(lapply(peakNamesSplit, length) == 4)
+counts <- counts[-rmPeaks,]
+peakNamesSplit <- peakNamesSplit[-rmPeaks]
+sn <- unlist(lapply(peakNamesSplit, "[[", 1))
+sn <- substr(sn, 4, nchar(sn))
+start <- as.numeric(unlist(lapply(peakNamesSplit, "[[", 2)))
+end <- as.numeric(unlist(lapply(peakNamesSplit, "[[", 3)))
+gr <- GRanges(seqnames=sn, ranges = IRanges(start=start, end=end), strand="*")
+names(gr) <- paste0("peak", 1:length(gr))
+
+
+# get GC content
+ff <- FaFile("~/data/genomes/mouse/Mus_musculus.NCBIM37.67.dna.toplevel.fa")
+peakSeqs <- getSeq(x=ff, gr)
+gcContentPeaks <- letterFrequency(peakSeqs, "GC",as.prob=TRUE)[,1]
+gcContentPeaks <- sample(gcContentPeaks)
+gcGroups <- Hmisc::cut2(gcContentPeaks, g=20)
+mcols(gr)$gc <- gcContentPeaks
+
+# remove peak ranges
+counts <- counts[,-1]
+# restrict to samples discussed in paper
+counts <- counts[,!substr(colnames(counts),1,2) == "D0"]
+
+# design
+gender <- factor(unlist(lapply(strsplit(colnames(counts), split="_"), "[[", 1)))
+tissue <- factor(unlist(lapply(strsplit(colnames(counts), split="_"), "[[", 2)))
+
+# metadata
+meta <- openxlsx::read.xlsx("~/data/atac/liu2019_atlas/Metadata.xlsx")
+meta <- meta[-nrow(meta),]
+metaNames <- paste(meta$Gender, gsub(x=meta$Tissue, pattern=" ", replacement="_"), paste0("Rep",meta$Replicate), sep = "_") # same format as sample names
+# same order as count matrix
+meta <- meta[match(colnames(counts), metaNames),]
+
+```
+
+Appropriate evaluations: 
+
+ - BIO_SIL (silhouette value of biological factors)
+ - PAM_SIL (avg silhouette after PAM)
+ - RLE_MED (medians of RLE values)
+ - RLE_IQR (IQR of RLE)
+ 
+Note that, based on the biplot in Sandrine's talk, expression correlation with (un)wanted variation seems to have a pretty big discrimnatory effect, so we might want to look at that, too. Here, cqn normalization after removing unwanted variation with RUV seems to be the best approach.
+
+```{r}
+bpparam <- BiocParallel::bpparam()
+bpparam$workers <- 1
+
+source("~/Dropbox/research/atacseq/method/scone_evaluation.R")
+
+expr <- as.matrix(counts)
+bio <- droplevels(interaction(gender,tissue))
+hk <- readRDS("~/data/genomes/hkListMouseGenomicRanges.rds")
+# get peaks that are within hk
+qh <- queryHits(findOverlaps(gr, hk, type="within"))
+negcon <- rownames(counts)[qh]
+# Consider data from the two experimetns to be two batches
+batch <- factor(meta$Slide_Lane.of.Sequencer)
+qc <- data.frame(meta$chrM.Reads, meta$chrM.Reads, meta$Percentage.of.Usable.Reads, meta$TSS.Enrichment, meta$IDR.Peaks)
+
+gcContentScone <- gcContentPeaks
+gcGroupsScone <- gcGroups
+# different number of bins
+gcGroupsScone10 <- Hmisc::cut2(gcContentPeaks, g=10)
+gcGroupsScone50 <- Hmisc::cut2(gcContentPeaks, g=50)
+gcGroupsScone100 <- Hmisc::cut2(gcContentPeaks, g=100)
+h5File <- "/Users/koenvandenberge/tmp/normCounts_liu2019_permuted.h5"
+sconeFit <- sconeEvaluation(counts=counts, bio=bio, batch=batch, qc=qc,
+                            negcon=negcon, gcContent=gcContentPeaks, 
+                            gcGroups=gcGroups, k_ruv=5, k_qc=2, 
+                            adjust_bio='no', eval_kclust = nlevels(bio),
+                            diffLength=TRUE, bpparam=bpparam, return_norm="hdf5",
+                            hdf5file=h5File)
+
+## add GC-bias through RLE to scores
+rleGC_med <- rleGCh5(h5File = h5File, 
+                  gcContent = gcContentScone,
+                  type="med")
+rleGC_iqr <- rleGCh5(h5File = h5File, 
+                  gcContent = gcContentScone,
+                  type="iqr")
+scores <- get_scores(sconeFit)
+# negative is good.
+scores <- cbind(scores, 
+                rleGC_med = -rleGC_med[rownames(scores)],
+                rleGC_iqr = -rleGC_iqr[rownames(scores)])
+## recalculate score ranks with new metric
+scoreT <- t(scores)
+ranked_scores <- apply(scoreT,1,rank)
+mean_score_rank <- rowMeans(ranked_scores)
+mean_score_rank <- mean_score_rank[order(mean_score_rank, decreasing=TRUE)]
+mean_score_rank
+
+```
+
+# Biplot
+
+```{r}
+pc_obj <- prcomp(apply(scoreT,1,rank),
+                center = TRUE,scale = FALSE)
+methodLabelsTmp <- strsplit(rownames(pc_obj$x), split=",")
+methodNames <- unlist(lapply(methodLabelsTmp, function(x){
+  paste0(x[2:3], collapse=",")
+  #x[2]
+}))
+methods <- unlist(lapply(strsplit(methodNames, split=","), "[[", 1))
+ruvs <- unlist(lapply(strsplit(methodNames, split=","), function(x) strsplit(x[2],split="_")))[seq(2,length(methodNames)*2, by=2)]
+methodNames <- paste(methods,ruvs, sep = "_")
+
+bp_obj <- biplot_color(pc_obj,y = -mean_score_rank,expand = .6, cex=2)
+text(x=bp_obj[,1], y=bp_obj[,2], labels=methodNames, cex=2/3)
+```
+
+# RLE Before and after
+
+```{r}
+meds <- rowMedians(as.matrix(counts))
+rleIk <- log(sweep(as.matrix(counts),1,meds,FUN="/"))
+boxplot(rleIk, ylab="RLE", xlab="Sample", main="RLE before normalization")
+abline(h=0, col="red", lty=2, lwd=3/2)
+
+out_norm = get_normalized(sconeFit,
+                          method = rownames(get_params(sconeFit))[1])
+meds <- rowMedians(as.matrix(out_norm))
+rleIk <- log(sweep(as.matrix(out_norm),1,meds,FUN="/"))
+boxplot(rleIk, ylab="RLE", xlab="Sample", main="RLE after normalization")
+abline(h=0, col="red", lty=2, lwd=3/2)
+```
+
+
+
+```{r}
+file.remove(h5File)
+saveRDS(scores, file="~/Dropbox/research/atacseq/bulk/analysis/benchmarkNormalization/permuted/liu2019_scores_permuted.rds")
+sessionInfo()
+```
+

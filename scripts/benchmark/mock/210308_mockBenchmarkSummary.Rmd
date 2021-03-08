@@ -80,6 +80,16 @@ for(kk in 1:length(metrics)){
   
   df <- data.frame(score = metricScores,
                    method = method)
+  df$method <- as.character(df$method)
+  df$method[df$method == "gcqn_median_50"] <- "GC-FQ"
+  df$method[df$method == "edaseq"] <- "FQ-FQ"
+  df$method[df$method == "gcqn_smooth"] <- "GC-FQ_smooth"
+  df$method[df$method == "fq"] <- "FQ"
+  df$method[df$method == "tmm"] <- "TMM"
+  df$method[df$method == "deseq"] <- "DESeq2"
+  df$method[df$method == "uq"] <- "UQ"
+  df$method[df$method == "none"] <- "None"
+  df$method[df$method == "sum"] <- "Sum"
   pListScore[[kk]] <- ggplot(df, aes(x=method, y=score)) +
     geom_boxplot() + 
     ggtitle(metrics[kk]) +
@@ -87,14 +97,30 @@ for(kk in 1:length(metrics)){
   
   df <- data.frame(scoreRank = metricScoreRanks,
                    method = method)
+  df$method <- as.character(df$method)
+  df$method[df$method == "gcqn_median_50"] <- "GC-FQ"
+  df$method[df$method == "edaseq"] <- "FQ-FQ"
+  df$method[df$method == "gcqn_smooth"] <- "GC-FQ_smooth"
+  df$method[df$method == "fq"] <- "FQ"
+  df$method[df$method == "tmm"] <- "TMM"
+  df$method[df$method == "deseq"] <- "DESeq2"
+  df$method[df$method == "uq"] <- "UQ"
+  df$method[df$method == "none"] <- "None"
+  df$method[df$method == "sum"] <- "Sum"
   pListScoreRank[[kk]] <- ggplot(df, aes(x=method, y=scoreRank)) +
     geom_boxplot() + 
     ggtitle(metrics[kk]) +
-    theme_classic()
-}
+    theme_classic()  +
+    theme(axis.text.x = element_text(angle = 30, vjust= 0.7, size=9),
+        axis.text.y = element_text(size=9)) +
+    ylim(c(1, 12)) +
+    xlab("") +
+    ylab("Score Rank")
+  }
 
 cowplot::plot_grid(plotlist=pListScore)
 cowplot::plot_grid(plotlist=pListScoreRank)
+ggsave("~/Dropbox/research/atacseq/bulk/plots/mockBenchmarkScoreRanks.pdf", width=12, height=12)
 
 
 ```

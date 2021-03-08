@@ -54,12 +54,12 @@ for(ii in 1:20){
   params <- scone::get_params(sconeFit)
   methods <- rownames(params)
   rleGCMedScores <- sapply(methods, function(met){
-    normCounts <- scone::get_normalized(sconeFit, methods[1])
+    normCounts <- scone::get_normalized(sconeFit, met)
     rleValue <- rleGC_med(counts=normCounts, gcContent=gcContent)
     return(rleValue)
   })
   rleGCIQRScores <- sapply(methods, function(met){
-    normCounts <- scone::get_normalized(sconeFit, methods[1])
+    normCounts <- scone::get_normalized(sconeFit,met)
     rleValue <- rleGC_iqr(counts=normCounts, gcContent=gcContent)
     return(rleValue)
   })

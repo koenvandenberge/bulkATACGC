@@ -1,0 +1,152 @@
+---
+title: "Benchmark normalization Calderon et al. 2019"
+author: "Koen Van den Berge"
+date: "12/9/2019"
+output: html_document
+---
+
+```{r}
+library(edgeR) ; library(cqn) ; library(GenomicAlignments)
+library(scone)
+library(qsmooth)
+library(rhdf5)
+
+### this dataset combines samples from a number of different sources, therefore the GC effects are wildly different between samples.
+data=read.delim("~/data/atac/calderon2019_GSE118189/GSE118189_ATAC_counts.txt.gz")
+colnames(data) <- substr(colnames(data),2,nchar(colnames(data)))
+
+# get GC content
+rn <- rownames(data)
+sn <- unlist(lapply(lapply(strsplit(rn,split="_"),"[",1),function(x) gsub(pattern="chr",x=x,replacement="")))
+start <- as.numeric(unlist(lapply(strsplit(rn,split="_"),"[",2)))
+end <- as.numeric(unlist(lapply(strsplit(rn,split="_"),"[",3)))
+gr <- GRanges(seqnames=sn, ranges=IRanges(start, end), strand="*", mcols=data.frame(peakID=rn))
+ff <- FaFile("~/data/genomes/human/Homo_sapiens.GRCh37.75.dna_sm.primary_assembly.fa")
+peakSeqs <- getSeq(x=ff, gr)
+gcContentPeaks <- letterFrequency(peakSeqs, "GC",as.prob=TRUE)[,1]
+gcContentPeaks <- sample(gcContentPeaks)
+gcGroups <- Hmisc::cut2(gcContentPeaks, g=20)
+
+# get metadata
+cnames <- colnames(data)
+donor <- unlist(lapply(strsplit(cnames,split=".",fixed=TRUE),"[",1))
+celltype <- unlist(lapply(strsplit(cnames,split=".",fixed=TRUE),"[",2))
+condition <- unlist(lapply(strsplit(cnames,split=".",fixed=TRUE),"[",3))
+table(celltype,condition)
+
+# QC measures
+qcMeasures <- openxlsx::read.xlsx(xlsxFile = "~/data/atac/calderon2019_GSE118189/Supplementary_tables.xlsx",
+                    sheet = 5)
+qcMeasures <- qcMeasures[,1:4]
+qcMeasures$sample <- gsub(x=qcMeasures$sample, pattern="-", replacement=".", fixed=TRUE)
+rownames(qcMeasures) <- qcMeasures$sample
+qcMeasures <- qcMeasures[colnames(data),]
+```
+
+# Benchmark normalization
+
+```{r}
+bpparam <- BiocParallel::bpparam()
+bpparam$workers <- 1
+counts <- as.matrix(data)
+
+### out of memory => filter 
+keep <- rowSums(edgeR::cpm(counts) > 2) >=10
+counts <- counts[keep,]
+gcContentPeaks <- gcContentPeaks[keep]
+gcGroups <- gcGroups[keep]
+gr <- gr[keep]
+
+
+source("~/Dropbox/research/atacseq/method/scone_evaluation.R")
+hk <- readRDS("~/data/genomes/hkListHumanGenomicRanges.rds")
+qh <- queryHits(findOverlaps(gr, hk, type="within"))
+negcon <- rownames(data)[qh]
+length(negcon)
+bio <- droplevels(interaction(celltype, condition))
+### Donor is batch / unwanted variation?
+## After communications with Diego Calderon, some samples received additional sequencing in 
+## an additional batch, so this is another batch effect to take into account.
+addSamples <- read.table("~/data/atac/calderon2019_GSE118189/samples_with_additional_resequencing.txt",
+                         stringsAsFactors = FALSE)[,1]
+addSamples <- gsub(x=addSamples, pattern="-", replacement=".", fixed=TRUE)
+batch2 <- rep(0, ncol(data))
+names(batch2) <- colnames(data)
+batch2[addSamples]<- 1
+batch2 <- factor(batch2)
+batch <- droplevels(interaction(donor, batch2))
+qc <- qcMeasures[,-1]
+
+rm(data, peakSeqs, rn, start, end, qcMeasures) ; gc()
+
+### filter
+eqid <- apply(counts, 1, function(x) diff(range(x)) < 1)
+if(sum(eqid) > 0){
+  counts <- counts[!eqid,]
+  gcContentScone <- gcContentPeaks[!eqid]
+  gcGroupsScone <- gcGroups[!eqid]
+  gr <- gr[!eqid]
+} else if(sum(eqid) == 0){
+  gcContentScone <- gcContentPeaks
+  gcGroupsScone <- gcGroups
+}
+  
+# gcContentScone <- gcContentPeaks
+# gcGroupsScone <- gcGroups
+# different number of bins
+gcGroupsScone10 <- Hmisc::cut2(gcContentPeaks, g=10)
+gcGroupsScone50 <- Hmisc::cut2(gcContentPeaks, g=50)
+gcGroupsScone100 <- Hmisc::cut2(gcContentPeaks, g=100)
+h5File <- "/Users/koenvandenberge/tmp/normCounts_calderon2019_permuted.h5"
+sconeFit <- sconeEvaluation(counts=counts, bio=bio, negcon=negcon, batch=batch, qc=qc, 
+                gcContent=gcContentPeaks, gcGroups=gcGroups, k_ruv=5,
+                k_qc=2, adjust_bio='no', eval_kclust = nlevels(bio),
+                diffLength=TRUE, bpparam=bpparam, return_norm="hdf5",
+                hdf5file=h5File)
+saveRDS(sconeFit, "~/Dropbox/research/atacseq/bulk/analysis/benchmarkNormalization/permuted/calderon2019_sconeFit_permuted.rds")
+
+## add GC-bias through RLE to scores
+rleGC_med <- rleGCh5(h5File = h5File, 
+                  gcContent = gcContentScone,
+                  type="med")
+rleGC_iqr <- rleGCh5(h5File = h5File, 
+                  gcContent = gcContentScone,
+                  type="iqr")
+scores <- get_scores(sconeFit)
+# negative is good.
+scores <- cbind(scores, 
+                rleGC_med = -rleGC_med[rownames(scores)],
+                rleGC_iqr = -rleGC_iqr[rownames(scores)])
+## recalculate score ranks with new metric
+scoreT <- t(scores)
+ranked_scores <- apply(scoreT,1,rank)
+mean_score_rank <- rowMeans(ranked_scores)
+mean_score_rank <- mean_score_rank[order(mean_score_rank, decreasing=TRUE)]
+mean_score_rank
+```
+
+
+# Biplot
+
+```{r}
+pc_obj <- prcomp(apply(scoreT,1,rank),
+                center = TRUE,scale = FALSE)
+methodLabelsTmp <- strsplit(rownames(pc_obj$x), split=",")
+methodNames <- unlist(lapply(methodLabelsTmp, function(x){
+  paste0(x[2:3], collapse=",")
+  #x[2]
+}))
+methods <- unlist(lapply(strsplit(methodNames, split=","), "[[", 1))
+ruvs <- unlist(lapply(strsplit(methodNames, split=","), function(x) strsplit(x[2],split="_")))[seq(2,length(methodNames)*2, by=2)]
+methodNames <- paste(methods,ruvs, sep = "_")
+
+bp_obj <- biplot_color(pc_obj,y = -mean_score_rank,expand = .6, cex=2)
+text(x=bp_obj[,1], y=bp_obj[,2], labels=methodNames, cex=2/3)
+```
+
+
+```{r}
+file.remove(h5File)
+saveRDS(scores, file="~/Dropbox/research/atacseq/bulk/analysis/benchmarkNormalization/permuted/calderon2019_scores_permuted.rds")
+sessionInfo()
+```

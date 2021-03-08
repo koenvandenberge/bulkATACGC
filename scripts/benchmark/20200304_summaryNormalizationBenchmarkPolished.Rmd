@@ -46,6 +46,65 @@ ggplot(scoreDfLong, aes(y=method, x=dataset, fill=rank)) +
 
 ```
 
+# Explore scores as function of methods
+
+```{r}
+# focus on no_uv
+scores_noUV <- lapply(scores, function(scoreMat){
+  scoreNames <- rownames(scoreMat)
+  scoreMat[grep(x=scoreNames, pattern="no_uv"),]
+})
+
+library(ggplot2)
+metrics <- colnames(scores_noUV[[1]])
+pListScore <- list()
+pListScoreRank <- list()
+scoreRanks <- lapply(scores_noUV, function(x){
+  apply(x, 2, rank)
+})
+for(kk in 1:length(metrics)){
+  # hlp <- try(unlist(lapply(scores, function(x) x[,metrics[kk]])))
+  # if(is(hlp, "try-error")) next
+  haveScore <- which(unlist(lapply(scores_noUV, function(x) metrics[kk] %in% colnames(x))))
+  metricScores <- unlist(lapply(scores_noUV[haveScore], function(x) x[,metrics[kk]]))
+  metricScoreRanks <- unlist(lapply(scoreRanks[haveScore], function(x) x[,metrics[kk]]))
+  method <- unlist(lapply(strsplit(names(metricScores), split=","), "[[", 2))
+  
+  df <- data.frame(score = metricScores,
+                   method = method)
+  pListScore[[kk]] <- ggplot(df, aes(x=method, y=score)) +
+    geom_boxplot() + 
+    ggtitle(metrics[kk]) +
+    theme_classic()
+  
+  df <- data.frame(scoreRank = metricScoreRanks,
+                   method = method)
+  df$method <- as.character(df$method)
+  df$method[df$method == "gcqn_median_50"] <- "GC-FQ"
+  df$method[df$method == "edaseq"] <- "FQ-FQ"
+  df$method[df$method == "gcqn_smooth"] <- "GC-FQ_smooth"
+  df$method[df$method == "fq"] <- "FQ"
+  df$method[df$method == "tmm"] <- "TMM"
+  df$method[df$method == "deseq"] <- "DESeq2"
+  df$method[df$method == "uq"] <- "UQ"
+  df$method[df$method == "none"] <- "None"
+  df$method[df$method == "sum"] <- "Sum"
+  pListScoreRank[[kk]] <- ggplot(df, aes(x=method, y=scoreRank)) +
+    geom_boxplot() + 
+    ggtitle(metrics[kk]) +
+    theme_classic() +
+    theme(axis.text.x = element_text(angle = 30, vjust= 0.7, size=9),
+        axis.text.y = element_text(size=9)) +
+    ylim(c(1, 12)) +
+    xlab("") +
+    ylab("Score Rank")
+}
+
+cowplot::plot_grid(plotlist=pListScore)
+cowplot::plot_grid(plotlist=pListScoreRank)
+ggsave("~/Dropbox/research/atacseq/bulk/plots/realDataBenchmarkScoreRanks.pdf", width=12, height=12)
+
+```
 
 # Order by average rank
 
