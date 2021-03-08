@@ -206,7 +206,8 @@ sconeEvaluation <- function(counts, bio, qc=NULL, batch=NULL, negcon, gcContent,
   # run
   my_scone <- scone(my_scone,
                     scaling=scaling,
-                    k_ruv = k_ruv, k_qc=k_qc,
+                    k_ruv = k_ruv, 
+                    k_qc=k_qc,
                     adjust_bio=adjust_bio,
                     eval_kclust=eval_kclust, ...)
   return(my_scone)

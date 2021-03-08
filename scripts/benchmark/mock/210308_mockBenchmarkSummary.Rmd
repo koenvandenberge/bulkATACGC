@@ -1,0 +1,101 @@
+---
+title: "ATAC-seq normalization summary, polished"
+author: "Koen Van den Berge"
+date: "12/12/2019"
+output: html_document
+---
+
+
+```{r}
+getMeanScoreRank <- function(scores){
+  scoreT <- t(scores)
+  ranked_scores <- apply(scoreT,1,rank)
+  mean_score_rank <- rowMeans(ranked_scores)
+  mean_score_rank <- mean_score_rank[order(mean_score_rank, decreasing=TRUE)]
+  return(mean_score_rank)
+}
+
+rmMethods <- c("gcqn_mean", "gcqn_median_10", "gcqn_median_20",  "gcqn_median_100",
+               "gcqn_median_permuted")
+
+filesDir <- "./"
+library(ggplot2)
+files <- list.files(filesDir,
+                    pattern = "^mockScores")
+datasets <- paste0(unlist(lapply(strsplit(files, split="_"),"[[",1)),1:length(files))
+scores <- sapply(1:length(files), function(ii) readRDS(paste0(filesDir,files[ii])),
+                 simplify=FALSE)
+# remove other methods
+scores <- lapply(scores, function(scoreMat){
+  scoreNames <- rownames(scoreMat)
+  rmID <- unlist(sapply(rmMethods, function(method){
+    grep(x=scoreNames, pattern=method)
+  }))
+  return(scoreMat[-rmID,])
+})
+scoreRanks <- lapply(scores, getMeanScoreRank)
+rankVector <- do.call(c,scoreRanks)
+scoreDfLong <- data.frame(method=names(rankVector),
+                          dataset=rep(datasets, each=length(scoreRanks[[1]])),
+                          rank=rankVector)
+
+pal <- wesanderson::wes_palette("Zissou1", n=40, type="continuous")
+ggplot(scoreDfLong, aes(y=method, x=dataset, fill=rank)) + 
+  geom_tile() + 
+  scale_fill_gradientn(colours = pal, name = 'Scone rank')
+
+```
+
+
+# Order by average rank
+
+```{r}
+library(dplyr)
+rankAv <- scoreDfLong %>% group_by(method) %>% summarize(avgRank=mean(rank, na.rm=TRUE))
+oo <- order(rankAv$avgRank, decreasing=TRUE)
+orderedMethods <- rankAv$method[oo]
+
+
+scoreDfOrdered <- scoreDfLong
+scoreDfOrdered$method <- factor(scoreDfOrdered$method, levels=orderedMethods)
+ggplot(scoreDfOrdered, aes(y=method, x=dataset, fill=rank)) + 
+  geom_tile() + 
+  scale_fill_gradientn(colours = pal, name = 'Scone rank')
+```
+
+# Investigate which scores are biased
+
+```{r}
+library(ggplot2)
+metrics <- colnames(scores[[1]])
+pListScore <- list()
+pListScoreRank <- list()
+scoreRanks <- lapply(scores, function(x){
+  apply(x, 2, rank)
+})
+for(kk in 1:length(metrics)){
+  metricScores <- unlist(lapply(scores, function(x) x[,metrics[kk]]))
+  metricScoreRanks <- unlist(lapply(scoreRanks, function(x) x[,metrics[kk]]))
+  method <- unlist(lapply(strsplit(names(metricScores), split=","), "[[", 2))
+  
+  df <- data.frame(score = metricScores,
+                   method = method)
+  pListScore[[kk]] <- ggplot(df, aes(x=method, y=score)) +
+    geom_boxplot() + 
+    ggtitle(metrics[kk]) +
+    theme_classic()
+  
+  df <- data.frame(scoreRank = metricScoreRanks,
+                   method = method)
+  pListScoreRank[[kk]] <- ggplot(df, aes(x=method, y=scoreRank)) +
+    geom_boxplot() + 
+    ggtitle(metrics[kk]) +
+    theme_classic()
+}
+
+cowplot::plot_grid(plotlist=pListScore)
+cowplot::plot_grid(plotlist=pListScoreRank)
+
+
+```
+

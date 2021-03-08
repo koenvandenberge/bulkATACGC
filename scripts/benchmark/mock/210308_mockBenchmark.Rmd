@@ -1,0 +1,81 @@
+---
+title: "Mock scone evaluation"
+author: "Koen Van den Berge"
+date: "3/8/2021"
+output: html_document
+---
+
+```{r}
+library(GenomicAlignments)
+library(edgeR)
+library(UpSetR)
+library(rafalib)
+library(tidyverse)
+library(ggridges)
+library(tidyr)
+library(quantro)
+library(qsmooth)
+library(RUVSeq)
+library(scone)
+library(rhdf5)
+source("../../../methods/scone_evaluation.R")
+
+for(ii in 1:20){
+  set.seed(ii)
+  dds <- DESeq2::makeExampleDESeqDataSet(n = 1e4,
+                                         m = 16,
+                                         betaSD = .2,
+                                         interceptMean = 4,
+                                         interceptSD = 2)
+  counts <- DESeq2::counts(dds)
+  counts <- counts[!rowVars(counts) == 0,]
+  bio <- colData(dds)$condition
+  batch <- NULL
+  qc <- NULL
+  negcon <- rownames(counts)[sample(x=nrow(counts), size=nrow(counts)/10)]
+  gcContent <- rnorm(n=nrow(counts), mean=0.55, sd=0.13)
+  gcContent[gcContent < 0] <- 0.01
+  gcContent[gcContent > 1] <- 0.99
+  gcGroups <- Hmisc::cut2(gcContent, g = 50)
+  bpparam <- BiocParallel::bpparam()
+  bpparam$workers <- 1
+  
+  gcGroupsScone <- gcGroups
+  gcContentScone <- gcContent
+  gcGroupsScone10 <- Hmisc::cut2(gcContent, g=10)
+  gcGroupsScone50 <- Hmisc::cut2(gcContent, g=50)
+  gcGroupsScone100 <- Hmisc::cut2(gcContent, g=100)
+  sconeFit <- sconeEvaluation(counts=counts, bio=bio, batch=batch, qc=qc,
+                              negcon=negcon, gcContent=gcContent, 
+                              gcGroups=gcGroups, k_ruv=0, k_qc=0, 
+                              adjust_bio='no', eval_kclust = nlevels(bio),
+                              diffLength=FALSE, bpparam=bpparam)
+  ## add GC-bias through RLE to scores
+  params <- scone::get_params(sconeFit)
+  methods <- rownames(params)
+  rleGCMedScores <- sapply(methods, function(met){
+    normCounts <- scone::get_normalized(sconeFit, methods[1])
+    rleValue <- rleGC_med(counts=normCounts, gcContent=gcContent)
+    return(rleValue)
+  })
+  rleGCIQRScores <- sapply(methods, function(met){
+    normCounts <- scone::get_normalized(sconeFit, methods[1])
+    rleValue <- rleGC_iqr(counts=normCounts, gcContent=gcContent)
+    return(rleValue)
+  })
+  scores <- get_scores(sconeFit)
+  scores <- cbind(scores,
+                  rleGC_med = -rleGCMedScores[rownames(scores)],
+                  rleGC_iqr = -rleGCIQRScores[rownames(scores)])
+  saveRDS(scores, file=paste0("mockScores_", ii,".rds"))
+  # scoreT <- t(scores)
+  # ranked_scores <- apply(scoreT,1,rank)
+  # mean_score_rank <- rowMeans(ranked_scores)
+  # mean_score_rank <- mean_score_rank[order(mean_score_rank, decreasing=TRUE)]
+  # mean_score_rank
+}
+```
+
+
+
+

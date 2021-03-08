@@ -1,0 +1,28 @@
+---
+title: "session Info"
+author: "Koen Van den Berge"
+date: "1/31/2021"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r}
+library(GenomicAlignments)
+library(tidyverse)
+library(cqn)
+library(RColorBrewer)
+library(edgeR)
+library(ggplot2)
+library(cowplot)
+library(ggridges)
+library(gridExtra)
+library(scone)
+library(EDASeq)
+library(qsmooth)
+library(aroma.light)
+library(DESeq2)
+```
+
