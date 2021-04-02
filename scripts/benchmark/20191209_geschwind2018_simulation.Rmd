@@ -1,0 +1,105 @@
+---
+title: "Geschwind 2018 simulation"
+author: "Koen Van den Berge"
+date: "3/22/2021"
+output: html_document
+---
+
+# Read in peak counts and get GC content
+
+```{r}
+library(GenomicAlignments)
+library(edgeR)
+library(UpSetR)
+library(rafalib)
+library(tidyverse)
+library(ggridges)
+library(tidyr)
+library(quantro)
+library(qsmooth)
+library(RUVSeq)
+library(scone)
+library(cqn)
+source("../../methods/gcqn_validated.R")
+gcqn_qsmooth <- function(counts, gcGroups, bio){
+  gcBinNormCounts <- matrix(NA, nrow=nrow(counts), ncol=ncol(counts), dimnames=list(rownames(counts),colnames(counts)))
+  for(ii in 1:nlevels(gcGroups)){
+    id <- which(gcGroups==levels(gcGroups)[ii])
+    countBin <- counts[id,]
+    qs <- qsmooth(countBin, group_factor=bio)
+    normCountBin <- qs@qsmoothData
+    normCountBin <- round(normCountBin)
+    normCountBin[normCountBin<0] <- 0
+    gcBinNormCounts[id,] <- normCountBin
+  }
+  return(gcBinNormCounts)
+}
+source("../../methods/simulation.R")
+
+df <- read.csv("../../data/geschwind2018_GSE95023/GSE95023_readswithinpeaks.csv.gz")
+counts <- df[,-c(1:3)]
+gr <- GRanges(seqnames=df$CHR, ranges=IRanges(df$START, df$END), strand="*", mcols=counts)
+ff <- FaFile("~/data/genomes/human/Homo_sapiens.GRCh37.75.dna_sm.primary_assembly.fa.gz")
+peakSeqs <- getSeq(x=ff, gr)
+gcContentPeaks <- letterFrequency(peakSeqs, "GC",as.prob=TRUE)[,1]
+gcGroups <- Hmisc::cut2(gcContentPeaks, g=20)
+```
+
+# Design
+
+Samples are derived from three individual donors.
+For every donor, neural progenitor (GZ) zone and neuron rich region (CP) is sequenced.
+For every sample, three to four technical replicates are available.
+
+```{r}
+patient <- factor(c(rep("A",7), rep("B",6), rep("C",6)))
+region <- factor(c(rep("GZ",4), rep("CP",3), rep("GZ",3), rep("CP",3), rep("GZ",3), rep("CP",3)))
+```
+
+
+# Mock comparison
+
+
+```{r}
+bio <- region 
+mockGroup <- splitSamples(bio)
+table(bio, mockGroup)
+
+keepSamplesMock <- which(!is.na(mockGroup))
+countsMock <- counts[,keepSamplesMock]
+mockGroup <- mockGroup[keepSamplesMock]
+
+mockEvalRes <- mockEvaluation(simCounts = countsMock,
+                               grpSim = mockGroup,
+                               simGC = gcContentPeaks,
+                               simWidth = width(gr),
+                               grSim = gr)
+```
+
+# Simulate data to add signal
+
+```{r}
+signalRes <- signalEvaluation(counts = countsMock,
+                              grp = mockGroup,
+                               gc = gcContentPeaks,
+                               gr = gr,
+                               nTotal = 12)
+```
+
+
+# Gather all results
+
+```{r}
+resultList <- list(mockEvalRes, signalRes)
+saveRDS(resultList, file="../../objects/geschwind2018_simulationResults.rds")
+```
+
+
+# Session info
+
+```{r}
+sessionInfo()
+```
+
+
+

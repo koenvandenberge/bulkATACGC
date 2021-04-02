@@ -17,7 +17,7 @@ library(rhdf5)
 df <- read.csv("../../data/geschwind2018_GSE95023/GSE95023_readswithinpeaks.csv.gz")
 counts <- df[,-c(1:3)]
 gr <- GRanges(seqnames=df$CHR, ranges=IRanges(df$START, df$END), strand="*", mcols=counts)
-ff <- FaFile("~/data/genomes/human/Homo_sapiens.GRCh37.75.dna_sm.primary_assembly.fa")
+ff <- FaFile("~/data/genomes/human/Homo_sapiens.GRCh37.75.dna_sm.primary_assembly.fa.gz")
 peakSeqs <- getSeq(x=ff, gr)
 gcContentPeaks <- letterFrequency(peakSeqs, "GC",as.prob=TRUE)[,1]
 gcGroups <- Hmisc::cut2(gcContentPeaks, g=20)

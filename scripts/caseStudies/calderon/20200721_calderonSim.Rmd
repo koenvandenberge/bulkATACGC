@@ -358,9 +358,6 @@ evaluateSimulation <- function(simCounts, simGC, simWidth, design, deId, grSim, 
   resGCQNSmooth <- testEdgeR(normCountsGcqnSmooth, design, tmm=FALSE)
   # RUVg
   resRUVg <- testEdgeR(ruvgCounts, design, tmm=FALSE)
-  # RUVs
-  # resRUVs <- testEdgeR(ruvsCounts, design, tmm=FALSE)
-
   
   truth <- rep(0, nrow(simCounts))
   truth[deId] <- 1
@@ -377,7 +374,6 @@ evaluateSimulation <- function(simCounts, simGC, simWidth, design, deId, grSim, 
                                       gcqn=resGCQN$table$PValue,
                                       gcqn_smooth=resGCQNSmooth$table$PValue,
                                       RUVg=resRUVg$table$PValue,
-                                      #RUVs=resRUVs$table$PValue,
                                       row.names=rownames(simCounts)),
             truth = truthDf)
   # cbd <- calculate_adjp(cbd)

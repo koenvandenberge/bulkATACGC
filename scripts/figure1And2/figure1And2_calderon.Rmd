@@ -347,8 +347,8 @@ p <- plot_grid(p1 + ggtitle("Memory NK cells"), pedgeR,
                pdeseq, pFQ,
                labels=letters[1:4])
 p
-ggsave("~/Dropbox/research/atacseq/bulk/plots/figure1.png",
-       units="in", width=12, height=9)
+# ggsave("~/Dropbox/research/atacseq/bulk/plots/figure1.png",
+#        units="in", width=12, height=9)
 ```
 
 
@@ -468,8 +468,11 @@ pFig2 <- cowplot::plot_grid(pRidge1,
                    pFC,
                    labels=c("a",""))
 pFig2
-ggsave("~/Dropbox/research/atacseq/bulk/plots/figure2.png",
-       units="in", width=12, height=9)
+# ggsave("~/Dropbox/research/atacseq/bulk/plots/figure2.png",
+#        units="in", width=12, height=9)
 ```
+
+
+
 
 

@@ -1,0 +1,107 @@
+---
+title: "Rizzardi 2019 simulation evaluation"
+author: "Koen Van den Berge"
+date: "3/22/2021"
+output: html_document
+---
+
+
+```{r}
+library(edgeR) ; library(cqn) ; library(GenomicAlignments)
+library(scone)
+library(qsmooth)
+library(rhdf5)
+library(GenomicAlignments)
+library(edgeR)
+library(UpSetR)
+library(rafalib)
+library(tidyverse)
+library(ggridges)
+library(tidyr)
+library(quantro)
+library(qsmooth)
+library(RUVSeq)
+library(scone)
+library(cqn)
+source("../../methods/gcqn_validated.R")
+gcqn_qsmooth <- function(counts, gcGroups, bio){
+  gcBinNormCounts <- matrix(NA, nrow=nrow(counts), ncol=ncol(counts), dimnames=list(rownames(counts),colnames(counts)))
+  for(ii in 1:nlevels(gcGroups)){
+    id <- which(gcGroups==levels(gcGroups)[ii])
+    countBin <- counts[id,]
+    qs <- qsmooth(countBin, group_factor=bio)
+    normCountBin <- qs@qsmoothData
+    normCountBin <- round(normCountBin)
+    normCountBin[normCountBin<0] <- 0
+    gcBinNormCounts[id,] <- normCountBin
+  }
+  return(gcBinNormCounts)
+}
+source("../../methods/simulation.R")
+
+
+data=read.delim("../../data/rizzardi2019_GSE96614/GSE96614_flow_sorted_brain.ATAC-seq_counts.txt.gz")
+
+# get GC content
+sn <- gsub(x=data[,1], pattern="chr", replacement="")
+start <- data[,2]
+end <- data[,3]
+gr <- GRanges(seqnames=sn, ranges=IRanges(start, end), strand="*")
+ff <- FaFile("~/data/genomes/human/Homo_sapiens.GRCh37.75.dna_sm.primary_assembly.fa.gz")
+peakSeqs <- getSeq(x=ff, gr)
+gcContentPeaks <- letterFrequency(peakSeqs, "GC",as.prob=TRUE)[,1]
+gcGroups <- Hmisc::cut2(gcContentPeaks, g=20)
+counts <- as.matrix(data[,-c(1:3)])
+rownames(counts) <- 1:nrow(counts)
+
+# get metadata
+individual <- as.factor(substr(colnames(counts),2,5))
+region <- as.factor(unlist(lapply(strsplit(colnames(counts), split=".", fixed=TRUE), "[[", 2)))
+neuCell <- as.factor(unlist(lapply(strsplit(colnames(counts), split=".", fixed=TRUE), "[[", 3)))
+table(neuCell, region, individual)
+``` 
+
+# Mock comparison
+
+
+```{r}
+bio <- interaction(region, neuCell)
+mockGroup <- splitSamples(bio)
+table(bio, mockGroup)
+
+keepSamplesMock <- which(!is.na(mockGroup))
+countsMock <- counts[,keepSamplesMock]
+mockGroup <- mockGroup[keepSamplesMock]
+
+mockEvalRes <- mockEvaluation(simCounts = countsMock,
+                               grpSim = mockGroup,
+                               simGC = gcContentPeaks,
+                               simWidth = width(gr),
+                               grSim = gr)
+```
+
+
+# Simulate data to add signal
+
+```{r}
+signalRes <- signalEvaluation(counts = countsMock,
+                              grp = mockGroup,
+                               gc = gcContentPeaks,
+                               gr = gr,
+                               nTotal = 12)
+```
+
+# Gather all results
+
+```{r}
+resultList <- list(mockEvalRes, signalRes)
+saveRDS(resultList, file="../../objects/rizzardi2019_simulationResults.rds")
+```
+
+
+# Session info
+
+```{r}
+sessionInfo()
+```
+

@@ -1,0 +1,114 @@
+---
+title: "Bryois 2018 simulation"
+author: "Koen Van den Berge"
+date: "3/13/2021"
+output: html_document
+---
+
+
+```{r}
+library(GenomicAlignments)
+library(edgeR)
+library(UpSetR)
+library(rafalib)
+library(tidyverse)
+library(ggridges)
+library(tidyr)
+library(quantro)
+library(qsmooth)
+library(RUVSeq)
+library(scone)
+library(rhdf5)
+library(cqn)
+source("../../methods/gcqn_validated.R")
+gcqn_qsmooth <- function(counts, gcGroups, bio){
+  gcBinNormCounts <- matrix(NA, nrow=nrow(counts), ncol=ncol(counts), dimnames=list(rownames(counts),colnames(counts)))
+  for(ii in 1:nlevels(gcGroups)){
+    id <- which(gcGroups==levels(gcGroups)[ii])
+    countBin <- counts[id,]
+    qs <- qsmooth(countBin, group_factor=bio)
+    normCountBin <- qs@qsmoothData
+    normCountBin <- round(normCountBin)
+    normCountBin[normCountBin<0] <- 0
+    gcBinNormCounts[id,] <- normCountBin
+  }
+  return(gcBinNormCounts)
+}
+source("../../methods/simulation.R")
+
+data=read.delim("../../data/bryois2018_schizophrenia/quant_peaks_1FDR_minOverlap2_300bpExt_300bp_centred_raw_288.txt.gz")
+counts <- as.matrix(data[,-c(1:4)])
+rownames(counts) <- data$ID
+
+# get GC content
+sn <- gsub(pattern="chr",x=data[,1],replacement="")
+start <- data[,2]
+end <- data[,3]
+gr <- GRanges(seqnames=sn, ranges=IRanges(start, end), strand="*", mcols=data.frame(peakID=data[,4]))
+ff <- FaFile("~/data/genomes/human/Homo_sapiens.GRCh37.75.dna_sm.primary_assembly.fa.gz")
+peakSeqs <- getSeq(x=ff, gr)
+gcContentPeaks <- letterFrequency(peakSeqs, "GC",as.prob=TRUE)[,1]
+gcGroups <- Hmisc::cut2(gcContentPeaks, g=20)
+
+# get metadata
+meta <- read.table("../../data/bryois2018_schizophrenia/tableS9.txt", header=TRUE)
+cnames <- colnames(counts)
+condition <- meta$Dx[match(meta$Sample, cnames)]
+table(condition)
+
+rmSamples <- which(condition %in% c("AFF", "BP"))
+condition <- condition[-rmSamples]
+counts <- counts[,-rmSamples]
+
+rm(data, start, end, peakSeqs) ; gc()
+```
+
+
+
+# Mock comparison
+
+
+```{r}
+bio <- droplevels(condition)
+mockGroup <- splitSamples(bio)
+table(bio, mockGroup)
+
+keepSamplesMock <- which(!is.na(mockGroup))
+countsMock <- counts[,keepSamplesMock]
+mockGroup <- mockGroup[keepSamplesMock]
+
+mockEvalRes <- mockEvaluation(simCounts = countsMock,
+                               grpSim = mockGroup,
+                               simGC = gcContentPeaks,
+                               simWidth = width(gr),
+                               grSim = gr,
+                               cqnWithLength = FALSE)
+```
+
+
+# Simulate data to add signal
+
+```{r}
+signalRes <- signalEvaluation(counts = countsMock,
+                              grp = mockGroup,
+                               gc = gcContentPeaks,
+                               gr = gr,
+                               nTotal = 12,
+                              cqnWithLength = FALSE)
+```
+
+
+# Gather all results
+
+```{r}
+resultList <- list(mockEvalRes, signalRes)
+saveRDS(resultList, file="../../objects/bryois2018_simulationResults.rds")
+```
+
+
+# Session info
+
+```{r}
+sessionInfo()
+```
+

@@ -1,0 +1,129 @@
+---
+title: "Calderon simulation evaluation"
+author: "Koen Van den Berge"
+date: "3/22/2021"
+output: html_document
+---
+
+```{r}
+library(edgeR) ; library(cqn) ; library(GenomicAlignments)
+library(scone)
+library(qsmooth)
+library(rhdf5)
+library(GenomicAlignments)
+library(edgeR)
+library(UpSetR)
+library(rafalib)
+library(tidyverse)
+library(ggridges)
+library(tidyr)
+library(quantro)
+library(qsmooth)
+library(RUVSeq)
+library(scone)
+library(cqn)
+source("../../methods/gcqn_validated.R")
+gcqn_qsmooth <- function(counts, gcGroups, bio){
+  gcBinNormCounts <- matrix(NA, nrow=nrow(counts), ncol=ncol(counts), dimnames=list(rownames(counts),colnames(counts)))
+  for(ii in 1:nlevels(gcGroups)){
+    id <- which(gcGroups==levels(gcGroups)[ii])
+    countBin <- counts[id,]
+    qs <- qsmooth(countBin, group_factor=bio)
+    normCountBin <- qs@qsmoothData
+    normCountBin <- round(normCountBin)
+    normCountBin[normCountBin<0] <- 0
+    gcBinNormCounts[id,] <- normCountBin
+  }
+  return(gcBinNormCounts)
+}
+source("../../methods/simulation.R")
+
+data=read.delim("../../data/calderon2019_GSE118189/GSE118189_ATAC_counts.txt.gz")
+colnames(data) <- substr(colnames(data),2,nchar(colnames(data)))
+
+# get GC content
+rn <- rownames(data)
+sn <- unlist(lapply(lapply(strsplit(rn,split="_"),"[",1),function(x) gsub(pattern="chr",x=x,replacement="")))
+start <- as.numeric(unlist(lapply(strsplit(rn,split="_"),"[",2)))
+end <- as.numeric(unlist(lapply(strsplit(rn,split="_"),"[",3)))
+gr <- GRanges(seqnames=sn, ranges=IRanges(start, end), strand="*", mcols=data.frame(peakID=rn))
+ff <- FaFile("~/data/genomes/human/Homo_sapiens.GRCh37.75.dna_sm.primary_assembly.fa.gz")
+peakSeqs <- getSeq(x=ff, gr)
+gcContentPeaks <- letterFrequency(peakSeqs, "GC",as.prob=TRUE)[,1]
+gcGroups <- Hmisc::cut2(gcContentPeaks, g=20)
+
+# get metadata
+cnames <- colnames(data)
+donor <- unlist(lapply(strsplit(cnames,split=".",fixed=TRUE),"[",1))
+celltype <- unlist(lapply(strsplit(cnames,split=".",fixed=TRUE),"[",2))
+condition <- unlist(lapply(strsplit(cnames,split=".",fixed=TRUE),"[",3))
+table(celltype,condition)
+
+# QC measures
+qcMeasures <- openxlsx::read.xlsx(xlsxFile = "../../data/calderon2019_GSE118189/Supplementary_tables.xlsx",
+                    sheet = 5)
+qcMeasures <- qcMeasures[,1:4]
+qcMeasures$sample <- gsub(x=qcMeasures$sample, pattern="-", replacement=".", fixed=TRUE)
+rownames(qcMeasures) <- qcMeasures$sample
+qcMeasures <- qcMeasures[colnames(data),]
+
+### out of memory => filter 
+counts <- as.matrix(data)
+keep <- rowSums(edgeR::cpm(counts) > 2) >=10
+counts <- counts[keep,]
+gcContentPeaks <- gcContentPeaks[keep]
+gcGroups <- gcGroups[keep]
+gr <- gr[keep]
+
+```
+
+
+
+# Mock comparison
+
+
+```{r}
+bio <- droplevels(interaction(celltype, condition))
+mockGroup <- splitSamples(bio)
+table(bio, mockGroup)
+
+keepSamplesMock <- which(!is.na(mockGroup))
+countsMock <- counts[,keepSamplesMock]
+mockGroup <- mockGroup[keepSamplesMock]
+
+mockEvalRes <- mockEvaluation(simCounts = countsMock,
+                               grpSim = mockGroup,
+                               simGC = gcContentPeaks,
+                               simWidth = width(gr),
+                               grSim = gr)
+```
+
+
+
+
+# Simulate data to add signal
+
+```{r}
+signalRes <- signalEvaluation(counts = countsMock,
+                              grp = mockGroup,
+                               gc = gcContentPeaks,
+                               gr = gr,
+                               nTotal = 12)
+```
+
+
+# Gather all results
+
+```{r}
+resultList <- list(mockEvalRes, signalRes)
+saveRDS(resultList, file="../../objects/calderon2019_simulationResults.rds")
+```
+
+
+# Session info
+
+```{r}
+sessionInfo()
+```
+
+

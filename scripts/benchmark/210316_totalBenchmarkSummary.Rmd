@@ -1,0 +1,566 @@
+---
+title: "Total benchmark summary"
+author: "Koen Van den Berge"
+date: "3/16/2021"
+output: 
+  html_document:
+    toc: true
+    toc_float: true
+---
+
+
+We have the following evaluation metrics for a scone evaluation:
+
+ - BIO_SIL
+ - BATCH_SIL
+ - PAM_SIL
+ - EXP_QC_COR
+ - EXP_UV_COR
+ - RLE_MED_GC
+ 
+In addition, we also simulate data, and use the following evaluation metrics:
+
+ 1. Mock analysis using simulation:
+  - False positive rate: fraction of DA peaks at 5% level.
+  - p-value distribution difference from uniform distribution, using the Hellinger distance.
+  - Is p-value uniformity affected by GC-content: variability in this distance with respect to different GC-content bins.
+
+ 2. DA analysis with signal, using simulation:
+  - AUROC
+  - Impact of GC on DA: how different is the GC-content distribution of DA peaks from the GC-content distribution of truly DA peaks? This again uses the Hellinger distance.
+  
+# Import and process scone evaluation
+
+Note that the scone scores have already been multiplied by (+/-)1 such that a high score corresponds to a good normalization.
+
+```{r sconeResults}
+sconeResultFiles <- list.files("../../objects",  
+                               pattern = "*scores.rds$", full.names = TRUE)
+sconeResultFilesShort <- list.files("../../objects",  
+                               pattern = "*scores.rds$")
+datasets <- unlist(lapply(strsplit(sconeResultFilesShort, split="_"),"[[",1))
+datasets[datasets %in% "geschwind2018"] <- "torre-ubieta2018"
+scores <- sapply(1:length(sconeResultFiles), function(ii) readRDS(sconeResultFiles[ii]))
+names(scores) <- datasets
+# remove other methods
+rmMethods <- c("gcqn_mean", "gcqn_median_10", "gcqn_median_20",  "gcqn_median_100",
+               "gcqn_median_permuted")
+scores <- lapply(scores, function(scoreMat){
+  scoreNames <- rownames(scoreMat)
+  rmID <- unlist(sapply(rmMethods, function(method){
+    grep(x=scoreNames, pattern=method)
+  }))
+  return(scoreMat[-rmID,])
+})
+# remove unused metrics
+rmMetrics <- c("RLE_MED", "RLE_IQR", "rleGC_iqr")
+scores <- lapply(scores, function(scoreMat){
+  scoreColNames <- colnames(scoreMat)
+  rmID <- unlist(sapply(rmMetrics, function(metric){
+    grep(x=scoreColNames, pattern=metric)
+  }))
+  return(scoreMat[,-rmID])
+})
+# focus on no_uv
+keepUV <- "no_uv"
+scores <- lapply(scores, function(scoreMat){
+  scoreNames <- rownames(scoreMat)
+  keepID <- grep(x=scoreNames, pattern=keepUV)
+  return(scoreMat[keepID,])
+})
+# rank scores: high rank is good score according to that metric.
+rankedScores <- lapply(scores, function(scoreMat){
+  apply(scoreMat,2,rank)
+})
+
+```
+
+# Import and process simulation evaluation
+
+```{r}
+simulationResultFiles <- list.files("../../objects",
+                          pattern = "simulationResults", full.names = TRUE)
+simulationResultFilesShort <- list.files("../../objects",  
+                               pattern = "simulationResults")
+datasets <- unlist(lapply(strsplit(simulationResultFilesShort, split="_"),"[[",1))
+datasets[datasets %in% "geschwind2018"] <- "torre-ubieta2018"
+simulationScores <- sapply(1:length(simulationResultFiles), function(ii){
+  readRDS(simulationResultFiles[ii])
+}, simplify = FALSE)
+names(simulationScores) <- datasets
+# remove unused metrics
+rmMetricsSim <- "aufdptpr"
+simulationScores <- lapply(simulationScores, function(scoreList){
+  scoreList[[2]] <- scoreList[[2]][!names(scoreList[[2]]) %in% rmMetricsSim]
+  return(scoreList)
+})
+```
+
+```{r}
+# high is good
+simulationScores <- lapply(simulationScores, function(simScoreList){
+  simScoreList[[1]]$fpr <- -abs(simScoreList[[1]]$fpr - 0.05)
+  simScoreList[[1]]$distUnifPvalMock <- -simScoreList[[1]]$distUnifPvalMock
+  simScoreList[[1]]$helDistVarGC <- -simScoreList[[1]]$helDistVarGC
+  # until fixed:
+  simScoreList[[2]]$DAGCDistDiff[is.na(simScoreList[[2]]$DAGCDistDiff)] <- 0
+  simScoreList[[2]]$DAGCDistDiff <- -simScoreList[[2]]$DAGCDistDiff
+  return(simScoreList)
+})
+simulationScoreMats <- lapply(simulationScores, function(simScoreList){
+  oneList <- c(simScoreList[[1]], simScoreList[[2]])
+  # ensure same order
+  nameOrder <- names(oneList[[1]])
+  oneList <- lapply(oneList, function(x) x[nameOrder])
+  scoreMat <- t(do.call(rbind, oneList))
+  return(scoreMat)
+})
+simulationScoreRanks <- lapply(simulationScoreMats, function(scoreMat){
+  apply(scoreMat,2,rank)
+})
+```
+
+
+# Merge scores
+
+```{r}
+rankedScores <- lapply(rankedScores, function(scoreMat){
+  rownames(scoreMat) <- unlist(lapply(strsplit(rownames(scoreMat), split=","), "[[", 2))
+  rownames(scoreMat)[rownames(scoreMat) == "gcqn_median_50"] <- "gcqn"
+  rownames(scoreMat)[rownames(scoreMat) == "fq"] <- "FQ"
+  if("cqn_length" %in% rownames(scoreMat)){
+    scoreMat <- scoreMat[!rownames(scoreMat) == "cqn",]
+    rownames(scoreMat)[rownames(scoreMat) == "cqn_length"] <- "cqn"
+  }
+  rownames(scoreMat)[rownames(scoreMat) == "tmm"] <- "TMM"
+  rownames(scoreMat)[rownames(scoreMat) == "deseq"] <- "DESeq2"
+  return(scoreMat)
+})
+
+# available datasets
+dats <- names(simulationScoreRanks)
+allScoreRanks <- list()
+for(dd in 1:length(dats)){
+  sconeScores <- rankedScores[[dats[dd]]]
+  simScores <- simulationScoreRanks[[dats[dd]]]
+  sconeScores <- sconeScores[rownames(simScores),]
+  allScores <- cbind(sconeScores, simScores)
+  allScoreRanks[[dd]] <- allScores
+}
+
+for(dd in 1:length(allScoreRanks)){
+  curScores <- allScoreRanks[[dd]]
+  rn <- rownames(curScores)
+  rn[rn == "gcqn"] <- "GC-FQ"
+  rn[rn == "edaseq"] <- "FQ-FQ"
+  rn[rn == "gcqn_smooth"] <- "GC-FQ_smooth"
+  rn[rn == "uq"] <- "UQ"
+  rn[rn == "none"] <- "None"
+  rn[rn == "sum"] <- "Sum"
+  rownames(curScores) <- rn
+  allScoreRanks[[dd]] <- curScores
+}
+```
+
+# Performance visualization
+
+## For each dataset
+
+```{r}
+library(ggplot2)
+gcNormMethods <- c("cqn", "FQ-FQ", "GC-FQ", "GC-FQ_smooth")
+pDat <- list()
+for(dd in 1:length(dats)){
+  curScores <- allScoreRanks[[dd]]
+  curScores <- curScores[order(rowMeans(curScores)),]
+  df <- data.frame(rank = c(curScores),
+                   method = rep(rownames(curScores), ncol(curScores)),
+                   metric = rep(colnames(curScores), each=nrow(curScores)))
+  df$method <- factor(df$method, levels = rownames(curScores))
+  # introduce class on what metrics assess
+  df$class <- NA
+  df$class[df$metric %in% c("BIO_SIL", "BATCH_SIL", "PAM_SIL", "EXP_QC_COR", "EXP_UV_COR")] <- "norm"
+  df$class[df$metric %in% c("rleGC_med", "helDistVarGC", "DAGCDistDiff")] <- "GC"
+  df$class[df$metric %in% c("fpr", "distUnifPvalMock", "auroc", "aufdptpr")] <- "DAA"
+  # shorter name for metrics
+  df$metric <- as.character(df$metric)
+  df$metric[df$metric == "BATCH_SIL"] <- "Batch Sil"
+  df$metric[df$metric == "BIO_SIL"] <- "Bio Sil"
+  df$metric[df$metric == "DAGCDistDiff"] <- "GC-dist DA"
+  df$metric[df$metric == "distUnifPvalMock"] <- "p-val unif"
+  df$metric[df$metric == "EXP_QC_COR"] <- "QC cor"
+  df$metric[df$metric == "EXP_UV_COR"] <- "UV cor"
+  df$metric[df$metric == "helDistVarGC"] <- "p-val GC"
+  df$metric[df$metric == "PAM_SIL"] <- "PAM Sil"
+  df$metric[df$metric == "rleGC_med"] <- "RLE GC"
+  df$dataset <- dats[dd]
+  if(dd == 1){
+    dfAll <- df
+  } else {
+    dfAll <- rbind(dfAll, df)
+  }
+  
+  
+  dfNorm <- df[df$class == "norm",]
+  pNorm <- ggplot(dfNorm, aes(x=metric, y=method, fill=rank)) +
+    geom_tile() +
+    scale_fill_gradient2() +
+  theme(legend.position = "none",
+          panel.background = element_blank(),
+          panel.grid.major = element_blank(), 
+          panel.grid.minor = element_blank(),
+        axis.text.x = element_text(angle = 25, size=9),
+        axis.text.y = element_text(size=12, colour=ifelse(levels(df$method) %in% gcNormMethods,
+                                                 "dodgerblue", "black")),
+        axis.ticks.y = element_blank()) +
+    scale_x_discrete(position = "top") +
+    ylab(NULL) +
+    xlab("Normalization \n performance") #+
+    # annotate("text", x = -0.2, y = 12, label = dats[dd], size=6) +
+    # coord_cartesian(ylim = c(0,10), xlim=c(1,length(unique(dfNorm$metric))), clip = "off")
+    
+  dfDA <- df[df$class == "DAA",]
+  pDA <- ggplot(dfDA, aes(x=metric, y=method, fill=rank)) +
+    geom_tile() +
+    scale_fill_gradient2(low = "skyblue", high="steelblue") +
+    theme(legend.position = "none",
+          axis.text.y = element_blank(),
+          axis.ticks.y = element_blank(),
+          panel.background = element_blank(),
+          panel.grid.major = element_blank(), 
+          panel.grid.minor = element_blank(),
+        axis.text.x = element_text(angle = 25, size=9)) +
+    scale_x_discrete(position = "top") +
+    xlab("Differential analysis \n performance") +
+    ylab(NULL)
+  
+  dfGC <- df[df$class == "GC",]
+  pGC <- ggplot(dfGC, aes(x=metric, y=method, fill=rank)) +
+    geom_tile() +
+    scale_fill_gradient2(low = "darkseagreen2", high="darkseagreen4") +
+    theme(legend.position = "none",
+          axis.text.y = element_blank(),
+          axis.ticks.y = element_blank(),
+          panel.background = element_blank(),
+          panel.grid.major = element_blank(), 
+          panel.grid.minor = element_blank(),
+        axis.text.x = element_text(angle = 25, size=9)) +
+    scale_x_discrete(position = "top") +
+    xlab("GC-content bias \n removal") +
+    ylab(NULL)
+  
+  pDat[[dd]] <- cowplot::plot_grid(pNorm, pDA, pGC,
+                     nrow = 1,
+                     rel_widths = c(1.5, 1, .85))
+}
+
+cowplot::plot_grid(plotlist = pDat,
+                   nrow = 4, ncol = 2,
+                   labels=dats,
+                   label_size = 11,
+                   label_x = -0.025)
+ggsave("~/Dropbox/research/atacseq/bulk/plots/totalBenchmarkPerDataset.pdf",
+       height = 14, width = 12)
+
+```
+
+## Across all datasets
+
+```{r}
+library(tidyverse)
+# get order across all
+avNormRanks <- dfAll %>%
+  group_by(method) %>%
+  summarize(avRank = mean(rank, na.rm=TRUE))
+orderedMethods <- as.character(avNormRanks$method[order(avNormRanks$avRank, decreasing=FALSE)])
+gcNormMethods <- c("cqn", "FQ-FQ", "GC-FQ", "GC-FQ_smooth")
+
+dfAllNorm <- dfAll[dfAll$class == "norm",]
+dfAllNormSummary <- dfAllNorm %>% 
+  group_by(dataset, method) %>%
+  summarize(meanRank = mean(rank))
+dfAllNormSummary$method <- factor(dfAllNormSummary$method, levels=orderedMethods)
+dfAllNormSummary$dataset <- factor(dfAllNormSummary$dataset,
+                                   levels = c("bryois2018", "calderon2019", "fullard2019",
+                                              "murphy2019","torre-ubieta2018",
+                                              "philip2017", "rizzardi2019",
+                                               "liu2019"))
+
+pNormAll <- ggplot(dfAllNormSummary, aes(x=dataset, y=method, fill=meanRank)) +
+    geom_tile() +
+    scale_fill_gradient2() +
+  theme(legend.position = "none",
+          panel.background = element_blank(),
+          panel.grid.major = element_blank(), 
+          panel.grid.minor = element_blank(),
+        axis.text.x = element_text(angle = 25, size=9, vjust=.8, hjust=.35),
+        axis.text.y = element_text(size = 14, 
+                                   colour=ifelse(orderedMethods %in% gcNormMethods,
+                                                 "dodgerblue", "black"))) +
+    scale_x_discrete(position = "top") +
+    ylab(NULL) +
+    xlab("Normalization \n performance")
+
+## Differential accessibility analysis
+dfAllNorm <- dfAll[dfAll$class == "DAA",]
+dfAllNormSummary <- dfAllNorm %>% 
+  group_by(dataset, method) %>%
+  summarize(meanRank = mean(rank))
+dfAllNormSummary$method <- factor(dfAllNormSummary$method, levels=orderedMethods)
+dfAllNormSummary$dataset <- factor(dfAllNormSummary$dataset,
+                                   levels = c("bryois2018", "calderon2019", "fullard2019",
+                                              "murphy2019","torre-ubieta2018",
+                                              "philip2017", "rizzardi2019",
+                                               "liu2019"))
+
+pDAAll <- ggplot(dfAllNormSummary, aes(x=dataset, y=method, fill=meanRank)) +
+    geom_tile() +
+    scale_fill_gradient2(low = "skyblue", high="steelblue") +
+    theme(legend.position = "none",
+          axis.text.y = element_blank(),
+          axis.ticks.y = element_blank(),
+          panel.background = element_blank(),
+          panel.grid.major = element_blank(), 
+          panel.grid.minor = element_blank(),
+        axis.text.x = element_text(angle = 25, size=9, vjust=.8, hjust=.35)) +
+    scale_x_discrete(position = "top") +
+    xlab("Differential analysis \n performance") +
+    ylab(NULL)
+
+
+## GC-content bias removal
+dfAllNorm <- dfAll[dfAll$class == "GC",]
+dfAllNormSummary <- dfAllNorm %>% 
+  group_by(dataset, method) %>%
+  summarize(meanRank = mean(rank))
+# get order
+avNormRanks <- dfAllNormSummary %>%
+  group_by(method) %>%
+  summarize(avRank = mean(meanRank))
+orderedMethods <- as.character(avNormRanks$method[order(avNormRanks$avRank, decreasing=FALSE)])
+dfAllNormSummary$method <- factor(dfAllNormSummary$method, levels=orderedMethods)
+dfAllNormSummary$dataset <- factor(dfAllNormSummary$dataset,
+                                   levels = c("bryois2018", "calderon2019", "fullard2019",
+                                              "murphy2019","torre-ubieta2018",
+                                              "philip2017", "rizzardi2019",
+                                               "liu2019"))
+
+pGCAll <- ggplot(dfAllNormSummary, aes(x=dataset, y=method, fill=meanRank)) +
+    geom_tile() +
+    scale_fill_gradient2(low = "darkseagreen2", high="darkseagreen4") +
+    theme(legend.position = "none",
+          axis.text.y = element_blank(),
+          axis.ticks.y = element_blank(),
+          panel.background = element_blank(),
+          panel.grid.major = element_blank(), 
+          panel.grid.minor = element_blank(),
+        axis.text.x = element_text(angle = 25, size=9, vjust=.8, hjust=.35)) +
+    scale_x_discrete(position = "top") +
+    xlab("GC-content bias \n removal") +
+    ylab(NULL)
+
+cowplot::plot_grid(pNormAll, pDAAll, pGCAll,
+                     nrow = 1,
+                     rel_widths = c(1.5, 1, 1))
+
+ggsave("~/Dropbox/research/atacseq/bulk/plots/totalBenchmarkSummary.pdf",
+       height = 6, width = 12)
+```
+
+## Across all datasets, no GC metrics
+
+```{r}
+library(tidyverse)
+# get order across all
+dfAll_noGC <- dfAll[!dfAll$class == "GC",]
+avNormRanks <- dfAll_noGC %>%
+  group_by(method) %>%
+  summarize(avRank = mean(rank, na.rm=TRUE))
+orderedMethods <- as.character(avNormRanks$method[order(avNormRanks$avRank, decreasing=FALSE)])
+gcNormMethods <- c("cqn", "FQ-FQ", "GC-FQ", "GC-FQ_smooth")
+
+dfAllNorm <- dfAll_noGC[dfAll_noGC$class == "norm",]
+dfAllNormSummary <- dfAllNorm %>% 
+  group_by(dataset, method) %>%
+  summarize(meanRank = mean(rank))
+dfAllNormSummary$method <- factor(dfAllNormSummary$method, levels=orderedMethods)
+dfAllNormSummary$dataset <- factor(dfAllNormSummary$dataset,
+                                   levels = c("bryois2018", "calderon2019", "fullard2019",
+                                              "murphy2019","torre-ubieta2018",
+                                              "philip2017", "rizzardi2019",
+                                               "liu2019"))
+
+pNormAll <- ggplot(dfAllNormSummary, aes(x=dataset, y=method, fill=meanRank)) +
+    geom_tile() +
+    scale_fill_gradient2() +
+  theme(legend.position = "none",
+          panel.background = element_blank(),
+          panel.grid.major = element_blank(), 
+          panel.grid.minor = element_blank(),
+        axis.text.x = element_text(angle = 25, size=9, vjust=.8, hjust=.35),
+        axis.text.y = element_text(size = 14, 
+                                   colour=ifelse(orderedMethods %in% gcNormMethods,
+                                                 "dodgerblue", "black"))) +
+    scale_x_discrete(position = "top") +
+    ylab(NULL) +
+    xlab("Normalization \n performance")
+
+## Differential accessibility analysis
+dfAllNorm <- dfAll_noGC[dfAll_noGC$class == "DAA",]
+dfAllNormSummary <- dfAllNorm %>% 
+  group_by(dataset, method) %>%
+  summarize(meanRank = mean(rank))
+dfAllNormSummary$method <- factor(dfAllNormSummary$method, levels=orderedMethods)
+dfAllNormSummary$dataset <- factor(dfAllNormSummary$dataset,
+                                   levels = c("bryois2018", "calderon2019", "fullard2019",
+                                              "murphy2019","torre-ubieta2018",
+                                              "philip2017", "rizzardi2019",
+                                               "liu2019"))
+
+pDAAll <- ggplot(dfAllNormSummary, aes(x=dataset, y=method, fill=meanRank)) +
+    geom_tile() +
+    scale_fill_gradient2(low = "skyblue", high="steelblue") +
+    theme(legend.position = "none",
+          axis.text.y = element_blank(),
+          axis.ticks.y = element_blank(),
+          panel.background = element_blank(),
+          panel.grid.major = element_blank(), 
+          panel.grid.minor = element_blank(),
+        axis.text.x = element_text(angle = 25, size=9, vjust=.8, hjust=.35)) +
+    scale_x_discrete(position = "top") +
+    xlab("Differential analysis \n performance") +
+    ylab(NULL)
+
+
+
+cowplot::plot_grid(pNormAll, pDAAll,
+                     nrow = 1,
+                     rel_widths = c(1.5, 1))
+
+ggsave("~/Dropbox/research/atacseq/bulk/plots/totalBenchmarkSummary_noGC.pdf",
+       height = 6, width = 10)
+```
+
+## For each benchmark component separately
+
+### Normalization
+
+```{r}
+# get order across all
+dfAllOnlyNorm <- dfAll[dfAll$class == "norm",]
+avNormRanks <- dfAllOnlyNorm %>%
+  group_by(method) %>%
+  summarize(avRank = mean(rank, na.rm=TRUE))
+orderedMethods <- as.character(avNormRanks$method[order(avNormRanks$avRank, decreasing=FALSE)])
+
+dfAllNormSummary <- dfAllOnlyNorm %>% 
+  group_by(dataset, method) %>%
+  summarize(meanRank = mean(rank))
+dfAllNormSummary$method <- factor(dfAllNormSummary$method, levels=orderedMethods)
+dfAllNormSummary$dataset <- factor(dfAllNormSummary$dataset,
+                                   levels = c("bryois2018", "calderon2019", "fullard2019",
+                                              "murphy2019","torre-ubieta2018",
+                                              "philip2017", "rizzardi2019",
+                                               "liu2019"))
+
+pNormOnly <- ggplot(dfAllNormSummary, aes(x=dataset, y=method, fill=meanRank)) +
+    geom_tile() +
+    scale_fill_gradient2() +
+  theme(legend.position = "none",
+          panel.background = element_blank(),
+          panel.grid.major = element_blank(), 
+          panel.grid.minor = element_blank(),
+        axis.text.x = element_text(angle = 25, size=9, vjust=.8, hjust=.35),
+        axis.text.y = element_text(size = 14, 
+                                   colour=ifelse(orderedMethods %in% gcNormMethods,
+                                                 "dodgerblue", "black"))) +
+    scale_x_discrete(position = "top") +
+    ylab(NULL) +
+    xlab("Normalization \n performance")
+pNormOnly
+```
+
+### Differential accessibility analysis
+
+```{r}
+# get order across all
+dfAllOnlyDA <- dfAll[dfAll$class == "DAA",]
+avNormRanks <- dfAllOnlyDA %>%
+  group_by(method) %>%
+  summarize(avRank = mean(rank, na.rm=TRUE))
+orderedMethods <- as.character(avNormRanks$method[order(avNormRanks$avRank, decreasing=FALSE)])
+
+dfAllNormSummary <- dfAllOnlyDA %>% 
+  group_by(dataset, method) %>%
+  summarize(meanRank = mean(rank))
+dfAllNormSummary$method <- factor(dfAllNormSummary$method, levels=orderedMethods)
+dfAllNormSummary$dataset <- factor(dfAllNormSummary$dataset,
+                                   levels = c("bryois2018", "calderon2019", "fullard2019",
+                                              "murphy2019","torre-ubieta2018",
+                                              "philip2017", "rizzardi2019",
+                                               "liu2019"))
+
+pDAOnly <- ggplot(dfAllNormSummary, aes(x=dataset, y=method, fill=meanRank)) +
+    geom_tile() +
+    scale_fill_gradient2(low = "skyblue", high="steelblue") +
+  theme(legend.position = "none",
+          panel.background = element_blank(),
+          panel.grid.major = element_blank(), 
+          panel.grid.minor = element_blank(),
+        axis.text.x = element_text(angle = 25, size=9, vjust=.8, hjust=.35),
+        axis.text.y = element_text(size = 14, 
+                                   colour=ifelse(orderedMethods %in% gcNormMethods,
+                                                 "dodgerblue", "black"))) +
+    scale_x_discrete(position = "top") +
+    ylab(NULL) +
+    xlab("Differential analysis \n performance")
+pDAOnly
+```
+
+### GC-content bias removal
+
+```{r}
+# get order across all
+dfAllOnlyGC <- dfAll[dfAll$class == "GC",]
+avNormRanks <- dfAllOnlyGC %>%
+  group_by(method) %>%
+  summarize(avRank = mean(rank, na.rm=TRUE))
+orderedMethods <- as.character(avNormRanks$method[order(avNormRanks$avRank, decreasing=FALSE)])
+
+dfAllNormSummary <- dfAllOnlyGC %>% 
+  group_by(dataset, method) %>%
+  summarize(meanRank = mean(rank))
+dfAllNormSummary$method <- factor(dfAllNormSummary$method, levels=orderedMethods)
+dfAllNormSummary$dataset <- factor(dfAllNormSummary$dataset,
+                                   levels = c("bryois2018", "calderon2019", "fullard2019",
+                                              "murphy2019","torre-ubieta2018",
+                                              "philip2017", "rizzardi2019",
+                                               "liu2019"))
+
+pGCOnly <- ggplot(dfAllNormSummary, aes(x=dataset, y=method, fill=meanRank)) +
+    geom_tile() +
+    scale_fill_gradient2(low = "darkseagreen2", high="darkseagreen4") +
+  theme(legend.position = "none",
+          panel.background = element_blank(),
+          panel.grid.major = element_blank(), 
+          panel.grid.minor = element_blank(),
+        axis.text.x = element_text(angle = 25, size=9, vjust=.8, hjust=.35),
+        axis.text.y = element_text(size = 14, 
+                                   colour=ifelse(orderedMethods %in% gcNormMethods,
+                                                 "dodgerblue", "black"))) +
+    scale_x_discrete(position = "top") +
+    ylab(NULL) +
+    xlab("GC-content bias \n removal")
+pGCOnly
+```
+
+```{r}
+cowplot::plot_grid(pNormOnly,
+                   pDAOnly,
+                   pGCOnly,
+                   labels=letters[1:3],
+                   nrow = 1)
+ggsave("~/Dropbox/research/atacseq/bulk/plots/totalBenchmark_perComponent.pdf",
+       width = 12, height = 6)
+```
+

@@ -1,0 +1,218 @@
+---
+title: "Fullard 2019 ATAC-seq human brain atlas normalizatoin benchmark"
+author: "Koen Van den Berge"
+date: "11/27/2019"
+output: html_document
+---
+
+
+```{r}
+library(GenomicAlignments)
+library(edgeR)
+library(UpSetR)
+library(rafalib)
+library(tidyverse)
+library(ggridges)
+library(tidyr)
+library(quantro)
+library(qsmooth)
+library(RUVSeq)
+library(scone)
+library(rhdf5)
+library(cqn)
+source("../../methods/gcqn_validated.R")
+gcqn_qsmooth <- function(counts, gcGroups, bio){
+  gcBinNormCounts <- matrix(NA, nrow=nrow(counts), ncol=ncol(counts), dimnames=list(rownames(counts),colnames(counts)))
+  for(ii in 1:nlevels(gcGroups)){
+    id <- which(gcGroups==levels(gcGroups)[ii])
+    countBin <- counts[id,]
+    qs <- qsmooth(countBin, group_factor=bio)
+    normCountBin <- qs@qsmoothData
+    normCountBin <- round(normCountBin)
+    normCountBin[normCountBin<0] <- 0
+    gcBinNormCounts[id,] <- normCountBin
+  }
+  return(gcBinNormCounts)
+}
+source("../../methods/simulation.R")
+
+
+
+counts <- read.table("../../data/fullard2019/boca_raw_count_matrix.tsv", 
+                     header=TRUE, stringsAsFactors = FALSE)
+
+```
+
+```{r}
+peaks <- read.table("../../data/fullard2019/boca_peaks_consensus_no_blacklisted_regions.bed", header=FALSE, stringsAsFactors = FALSE)
+colnames(peaks) <- c("chromosome", "start", "end", "name")
+
+peakNames <- peaks$name
+sn <- substr(peaks$chromosome, 4, sapply(peaks$chromosome, nchar))
+start <- peaks$start
+end <- peaks$end
+gr <- GRanges(seqnames=sn, ranges = IRanges(start=start, end=end), strand="*")
+names(gr) <- peaks$name
+
+# get GC content
+ff <- FaFile("~/data/genomes/human/Homo_sapiens.GRCh37.75.dna_sm.primary_assembly.fa.gz")
+peakSeqs <- getSeq(x=ff, gr)
+gcContentPeaks <- letterFrequency(peakSeqs, "GC",as.prob=TRUE)[,1]
+gcGroups <- Hmisc::cut2(gcContentPeaks, g=20)
+mcols(gr)$gc <- gcContentPeaks
+
+# design
+# the data should consist of 2 cell types (neurons and non-neurons) across 14 distinct brain regions of 5 individuals
+colnames(counts) <- gsub(x=colnames(counts),pattern="^X", replacement="")
+individual <- factor(unlist(lapply(strsplit(colnames(counts), split="_"), "[[", 1)))
+celltype <- factor(unlist(lapply(strsplit(colnames(counts), split="_"), "[[", 2)))
+region <- factor(unlist(lapply(strsplit(colnames(counts), split="_"), "[[", 3)))
+
+# metadata
+meta <- readr::read_delim("../../data/fullard2019/metadata_boca.csv", 
+                   delim="\t")
+table(meta$Sequence_date, meta$Flowcell)
+table(meta$Sequence_date, meta$Sort_date)
+
+###  filter 
+keep <- rowSums(edgeR::cpm(counts) > 2) >=10
+counts <- counts[keep,]
+gcContentPeaks <- gcContentPeaks[keep]
+gcGroups <- gcGroups[keep]
+gr <- gr[keep]
+```
+
+# Mock comparison
+
+```{r}
+bio <- droplevels(interaction(celltype, region))
+mockGroup <- splitSamples(bio)
+table(bio, mockGroup)
+
+keepSamplesMock <- which(!is.na(mockGroup))
+countsMock <- counts[,keepSamplesMock]
+mockGroup <- mockGroup[keepSamplesMock]
+
+
+mockEvalRes <- mockEvaluation(simCounts = countsMock,
+                               grpSim = mockGroup,
+                               simGC = gcContentPeaks,
+                               simWidth = width(gr),
+                               grSim = gr)
+
+
+```
+
+
+
+# Simulate data to add signal
+
+```{r}
+signalRes <- signalEvaluation(counts = countsMock,
+                              grp = mockGroup,
+                               gc = gcContentPeaks,
+                               gr = gr,
+                               nTotal = 12)
+```
+
+
+
+
+
+# Gather all results
+
+```{r}
+resultList <- list(mockEvalRes, signalRes)
+saveRDS(resultList, file="../../objects/fullard2019_simulationResults.rds")
+```
+
+
+```{r oldMock, eval=FALSE}
+# DA on mock
+evalMock <- evaluateSimulation(simCounts = countsMock,
+                                grpSim = mockGroup,
+                                deId = NULL,
+                                simGC = gcContentPeaks,
+                                simWidth = width(gr),
+                                grSim = gr,
+                               ruv=FALSE)
+
+## calculate three metrics: FPR, p-value uniformity, p-value uniformity variability wrt GC.
+rafalib::mypar(mfrow=c(4,2))
+for(kk in 1:ncol(pval(evalMock))) hist(pval(evalMock)[,kk], breaks=20, main=colnames(pval(evalMock))[kk])
+# FPR: DA peaks at 5% nominal level
+fpr <- apply(pval(evalMock), 2, function(x) mean(x <= 0.05))
+fpr
+
+# p-value uniformity
+helDist <- c()
+for(kk in 1:ncol(pval(evalMock))){
+  curP <- pval(evalMock)[,kk]
+  x <- cbind(curP, seq(0,1,length=length(curP)))
+  helDist[kk] <- statip::hellinger(x=curP, y=seq(0,1,length=length(curP)))
+}
+names(helDist) <- colnames(pval(evalMock))
+
+# p-value uniformity variability wrt GC: note confounding with mean count...
+fprGCList <- list()
+distGCList <- list()
+for(kk in 1:ncol(pval(evalMock))){
+  pvals <- pval(evalMock)[,kk]
+  rafalib::mypar(mfrow=c(5,4))
+  fprBin <- helDistBin <- c()
+  for(bb in 1:nlevels(gcGroups)){
+    pvalBin <- pvals[gcGroups == levels(gcGroups)[bb]]
+    hist(pvalBin, breaks=seq(0,1,length=20))
+    fprBin[bb] <- mean(pvalBin <= 0.05)
+    helDistBin[bb] <- statip::hellinger(x=pvalBin, y=seq(0,1,length=length(pvalBin)))
+  }
+  fprGCList[[kk]] <- fprBin
+  distGCList[[kk]] <- helDistBin
+}
+names(fprGCList) <- names(distGCList) <- colnames(pval(evalMock))
+helDistVar <- unlist(lapply(distGCList, var))
+rafalib::mypar(mfrow=c(4,2))
+lapply(fprList, plot, type='b')
+```
+
+```{r oldSignal, eval=FALSE}
+simData <- simulateData(counts = countsMock,
+                           grp = mockGroup,
+                           nTotal = 12)
+
+evalSimResults <- evaluateSimulation(simCounts = simData$simCounts,
+                                     grpSim = simData$grp,
+                                     deId = simData$deId,
+                                     simGC = gcContentPeaks,
+                                     simWidth = width(gr),
+                                     grSim = gr)
+
+## calculate two metrics: AUC under ROC or FDR-TPR, imbalance in DA peaks wrt GC-content
+## AUROC
+aucRes <- calcAUC(evalSimResults)
+aucRes
+
+## imbalance in DA peaks wrt GC content
+cbd <- iCOBRA::calculate_adjp(evalSimResults)
+padj <- iCOBRA::padj(cbd)
+daPeaksGC <- apply(padj, 2, function(x){
+  gcContentPeaks[which(x <= 0.05)]
+})
+rafalib::mypar(mfrow=c(3,3))
+for(kk in 1:length(daPeaksGC)){
+  if(length(daPeaksGC[[kk]]) == 0) next
+  hist(daPeaksGC[[kk]], breaks = 20, xlim=c(0.2, 0.8), main=names(daPeaksGC)[kk])
+}
+# measure of how different the distributions are to the truth
+trueGC <- gcContentPeaks[simData$deId]
+hist(trueGC, breaks=20) # true distribution
+decdf <- function(x, true, sample)  ecdf(true)(x) - ecdf(sample)(x)
+grid <- seq(min(trueGC), max(trueGC), length=100)
+ecdfDiff <- unlist(lapply(daPeaksGC, function(x){
+  if(length(x) == 0) return(NA)
+  sum(abs(decdf(x = grid,
+      true = trueGC,
+      sample = x)))
+}))
+ecdfDiff
+```
