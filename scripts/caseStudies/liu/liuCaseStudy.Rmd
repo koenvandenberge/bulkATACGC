@@ -279,6 +279,7 @@ resList <- resList[-length(resList)]
 mypar(mfrow=c(3,3), mar=c(4,4,2,1), bty='l', las=2, cex.axis=3/2, cex.lab=3/2, cex.main=2)
 for(ii in 1:length(resList)){
   tab <- resList[[ii]]
+  
   if(ii == 2){
     boxplot(tab$log2FoldChange ~ gcGroups, ylim=c(2,-2), main=names(resList)[ii],
             xaxt="n", xlab="GC-content bin", ylab="Log2 fold change")
@@ -289,6 +290,41 @@ for(ii in 1:length(resList)){
     abline(h=0, lwd=2, col="red", lty=2)
   }
 }
+# dev.off()
+
+gcBoxplot <- function(df, title){
+  ggplot(df) +
+  aes(x=gc, y=logFC, color=gc) +
+  geom_violin() +
+  geom_boxplot(width=0.1) +
+  scale_color_manual(values=wesanderson::wes_palette("Zissou1", nlevels(df$gc), "continuous")) +
+  geom_abline(intercept = 0, slope = 0, col="black", lty=2) +
+  theme_bw() +
+  ylim(c(-2,2)) +
+  xlab("GC-content bin") +
+  ggtitle(title) +
+  theme(axis.text.x = element_text(size=0),
+        legend.position = "none",
+        axis.title = element_text(size=13))
+}
+
+# fold change bias ggplot
+pBoxList <- list()
+for(ii in 1:length(resList)){
+  tab <- resList[[ii]]
+  
+  if(ii == 2){
+    df <- data.frame(gc = gcGroups,
+                     logFC = tab$log2FoldChange)
+    pBoxList[[ii]] <- gcBoxplot(df, names(resList)[ii])
+  } else {
+    df <- data.frame(gc = gcGroups,
+                     logFC = tab$table$logFC)
+    pBoxList[[ii]] <- gcBoxplot(df, names(resList)[ii])
+  }
+}
+cowplot::plot_grid(plotlist = pBoxList)
+ggsave("~/Dropbox/research/atacseq/bulk/plots/liu_foldChange_ggplot.png", width=8, height=7)
 # dev.off()
 
 ### check distribution of GC-content for top 5000 peaks.
