@@ -259,8 +259,8 @@ cowplot::plot_grid(plotlist = pDat,
                    labels=dats,
                    label_size = 11,
                    label_x = -0.025)
-ggsave("~/Dropbox/research/atacseq/bulk/plots/totalBenchmarkPerDataset.pdf",
-       height = 14, width = 12)
+# ggsave("~/Dropbox/research/atacseq/bulk/plots/totalBenchmarkPerDataset.pdf",
+#        height = 14, width = 12)
 
 ```
 
@@ -285,6 +285,7 @@ dfAllNormSummary$dataset <- factor(dfAllNormSummary$dataset,
                                               "murphy2019","torre-ubieta2018",
                                               "philip2017", "rizzardi2019",
                                                "liu2019"))
+dfAllNormSummaryNorm <- dfAllNormSummary
 
 pNormAll <- ggplot(dfAllNormSummary, aes(x=dataset, y=method, fill=meanRank)) +
     geom_tile() +
@@ -312,6 +313,7 @@ dfAllNormSummary$dataset <- factor(dfAllNormSummary$dataset,
                                               "murphy2019","torre-ubieta2018",
                                               "philip2017", "rizzardi2019",
                                                "liu2019"))
+dfAllNormSummaryDA <- dfAllNormSummary
 
 pDAAll <- ggplot(dfAllNormSummary, aes(x=dataset, y=method, fill=meanRank)) +
     geom_tile() +
@@ -344,6 +346,7 @@ dfAllNormSummary$dataset <- factor(dfAllNormSummary$dataset,
                                               "murphy2019","torre-ubieta2018",
                                               "philip2017", "rizzardi2019",
                                                "liu2019"))
+dfAllNormSummaryGC <- dfAllNormSummary
 
 pGCAll <- ggplot(dfAllNormSummary, aes(x=dataset, y=method, fill=meanRank)) +
     geom_tile() +
@@ -363,9 +366,42 @@ cowplot::plot_grid(pNormAll, pDAAll, pGCAll,
                      nrow = 1,
                      rel_widths = c(1.5, 1, 1))
 
-ggsave("~/Dropbox/research/atacseq/bulk/plots/totalBenchmarkSummary.pdf",
-       height = 6, width = 12)
+# ggsave("~/Dropbox/research/atacseq/bulk/plots/totalBenchmarkSummary.pdf",
+#        height = 6, width = 12)
 ```
+
+## Include global overview
+
+```{r}
+dfAllSummary <- rbind(dfAllNormSummaryNorm,
+                      dfAllNormSummaryDA,
+                      dfAllNormSummaryGC)
+dfAllSummSumm <- dfAllSummary %>% 
+  group_by(method) %>%
+  summarize(meanmeanRank=mean(meanRank))
+dfAllSummSumm$global <- factor(rep("global", nrow(dfAllSummSumm)))
+
+pGlobal <- ggplot(dfAllSummSumm, aes(x=global, y=method, fill=meanmeanRank)) +
+    geom_tile() +
+    scale_fill_gradient2(low = "darkgoldenrod1", high="darkgoldenrod3") +
+    theme(legend.position = "none",
+          axis.text.y = element_blank(),
+          axis.ticks.y = element_blank(),
+          panel.background = element_blank(),
+          panel.grid.major = element_blank(), 
+          panel.grid.minor = element_blank(),
+        axis.text.x = element_text(angle = 25, size=9, vjust=.8, hjust=.35)) +
+    scale_x_discrete(position = "top") +
+    xlab("GC-content bias \n removal") +
+    ylab(NULL)
+
+
+cowplot::plot_grid(pNormAll, pDAAll, pGCAll, pGlobal,
+                     nrow = 1,
+                     rel_widths = c(1.5, 1, 1, .2))
+```
+
+
 
 ## Across all datasets, no GC metrics
 
@@ -437,8 +473,8 @@ cowplot::plot_grid(pNormAll, pDAAll,
                      nrow = 1,
                      rel_widths = c(1.5, 1))
 
-ggsave("~/Dropbox/research/atacseq/bulk/plots/totalBenchmarkSummary_noGC.pdf",
-       height = 6, width = 10)
+# ggsave("~/Dropbox/research/atacseq/bulk/plots/totalBenchmarkSummary_noGC.pdf",
+#        height = 6, width = 10)
 ```
 
 ## For each benchmark component separately
