@@ -834,52 +834,32 @@ barplot(peakFeaturesCqn$percentage / peakFeaturesAll$percentage,
 #dev.off()
 ```
 
-
-
-
-
-
-
-### Old: GO enrichment on peaks only found by FQ-FQ and GC-FQ but not FQ
+### Overlap using `annotatr`
 
 ```{r}
-gcfqPeaks <- unique(c(daPeaks$`FQ-FQ`, daPeaks$`GC-FQ`))
-fqPeaks <- daPeaks$FQ
-gcfqUniquePeaks <- gcfqPeaks[!gcfqPeaks %in% fqPeaks]
+library(annotatr)
+grep(x=annotatr::builtin_annotations(),
+     pattern="hg19",
+     value=TRUE)
+# annotChoices <- c("hg19_basicgenes", "hg19_enhancers_fantom")
+annotChoices <- c("hg19_enhancers_fantom")
+annotations = build_annotations(genome = 'hg19', annotations = annotChoices)
+grChr <- GRanges(seqnames = paste0("chr",seqnames(gr)),
+                 ranges = ranges(gr),
+                 strand = strand(gr),
+                 mcols = mcols(gr))
+names(grChr) <- names(gr)
+gr_annotated = annotate_regions(
+    regions = grChr,
+    annotations = annotations,
+    ignore.strand = TRUE,
+    quiet = FALSE)
+print(gr_annotated)
+df_gr_annotated = data.frame(gr_annotated)
 
-### genomic features
-peakFeaturesGcfq <- suppressWarnings(assignChromosomeRegion(gr[gcfqUniquePeaks],
-                                                           nucleotideLevel=FALSE,
-                                                  TxDb=TxDb.Hsapiens.UCSC.hg19.knownGene))
-barplot(peakFeaturesGcfq$percentage / peakFeaturesAll$percentage) ; abline(h=1, lty=2)
+mean(paste0("Peak_",gcfqPeaks) %in% names(gr_annotated))
+mean(paste0("Peak_",fqPeaks) %in% names(gr_annotated))
 
-
-## GO enrichment recovers no gene sets.
-annoData <- toGRanges(EnsDb.Hsapiens.v75, feature="gene")
-sn <- as.character(seqnames(annoData))
-sn <- factor(gsub(x=sn, pattern="chr", replacement=""))
-annoData <- GRanges(seqnames=sn, ranges=ranges(annoData), strand=strand(annoData),
-                    mcols=mcols(annoData))
-gcfqPeaksAnnotated <- suppressWarnings(annotatePeakInBatch(gr[gcfqUniquePeaks],
-                                                           AnnotationData=annoData,
-                                                         output="nearestBiDirectionalPromoters",
-                                                         bindingRegion=c(-2000, 500)))
-goResgcfq <- getEnrichedGO(gcfqPeaksAnnotated, orgAnn="org.Hs.eg.db", maxP=.05, 
-                       minGOterm=10, multiAdjMethod="BH", condense=FALSE)
-goResGcfqUniq <- lapply(goResgcfq, function(tab){
-  tab2 <- unique(tab[,1:10])
-  tab2 <- tab2[order(tab2$pvalue, decreasing=FALSE),]
-  rownames(tab2) <- NULL
-  tab2
-  })
-
-head(goResGcfqUniq$bp)
-head(goResGcfqUniq$mf)
-head(goResGcfqUniq$cc)
-
-xtable::xtable(head(goResGcfqUniq$bp[,c(1:2,10)], n=20), digits=4)
-xtable::xtable(head(goResGcfqUniq$cc[,c(1:2,10)], n=20), digits=4)
-
-# fraction annotated
-length(gcfqPeaksAnnotated) / length(gcfqUniquePeaks)
+mean(names(gr_annotated) %in% paste0("Peak_",gcfqPeaks))
+mean(names(gr_annotated) %in% paste0("Peak_",fqPeaks))
 ```
