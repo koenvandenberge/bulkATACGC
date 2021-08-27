@@ -95,8 +95,11 @@ d <- estimateDisp(d, design)
 fit <- glmFit(d, design)
 lrt <- glmLRT(fit, coef=2)
 
+par(bty='l')
 boxplot(lrt$table$logFC ~ gcGroups,
-        ylim=c(-1,1), ylab="logFC", xlab="GC-content") ; abline(h=0, col="red")
+        ylim=c(-1,1), ylab="logFC", xlab="GC-content bin (low to high)",
+        xaxt="n")
+abline(h=0, col="red")
 
 dfEdgeR <- data.frame(logFC=log(2^lrt$table$logFC),
                  gc=gcGroups)
@@ -117,3 +120,60 @@ pedgeR <- ggplot(dfEdgeR) +
 pedgeR
 
 ```
+
+
+# Lowess fits
+
+```{r}
+colsBig <- clusterExperiment:::massivePalette
+
+regionPatient <- factor(paste0(region, patient))
+
+lowListGC <- list()
+for(kk in 1:ncol(counts)){
+  set.seed(kk)
+  lowListGC[[kk]] <- lowess(x=gcContentPeaks, y=log1p(counts[,kk]), f=1/10)
+}
+
+for(cc in 1:nlevels(regionPatient)){
+  curCT <- levels(regionPatient)[cc]
+  id <- which(regionPatient == curCT)
+  plot(x=seq(min(gcContentPeaks), max(gcContentPeaks), length=10),
+     y=seq(2.8, 5, length=10), type='n',
+     xlab="GC-content", ylab="log(count + 1)", main=curCT)
+  for(ii in 1:length(id)){
+    curID <- id[ii]
+    oo <- order(lowListGC[[curID]]$x)
+    lines(x=lowListGC[[curID]]$x[oo], y=lowListGC[[curID]]$y[oo], col=colsBig)
+  }
+}
+
+# across all cell types
+set.seed(44)
+pList <- c()
+id <- sample(nrow(counts), size=1e4)
+for(cc in 1:nlevels(regionPatient)){
+  curCT <- levels(regionPatient)[cc]
+  lowCT <- lowListGC[regionPatient == curCT]
+  dfList <- list()
+  for(ss in 1:length(lowCT)){
+  oox <- order(lowCT[[ss]]$x[id])
+  dfList[[ss]] <- data.frame(x=lowCT[[ss]]$x[id][oox], y=lowCT[[ss]]$y[id][oox], sample=ss)
+  }
+  dfAll <- do.call(rbind, dfList)
+  dfAll$sample <- factor(dfAll$sample)
+  pCT <- ggplot(dfAll, aes(x=x, y=y, group=sample, color=sample)) +
+    geom_line(size = 1) +
+    xlab("GC-content") +
+    ylab("log(count + 1)") +
+    theme_classic() +
+    ggtitle(curCT) +
+    theme(legend.position = "none") +
+    ylim(c(2.8, 5.5))
+  pList[[cc]] <- pCT
+}
+
+cowplot::plot_grid(plotlist=pList, nrow=2, ncol=3)
+
+```
+
