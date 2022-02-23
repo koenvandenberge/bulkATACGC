@@ -1,0 +1,48 @@
+---
+title: "gcapc peak fragment counting"
+author: "Koen Van den Berge"
+date: "12/26/2021"
+output: html_document
+---
+
+
+```{r}
+library(gcapc)
+library(GenomicRanges)
+gcapcPeakList <- readRDS("../../data/gcapc/gcapcPeakListAll.rds")
+gcapcPeakList <- gcapcPeakList[3:4]
+# merge overlapping peaks as in paper
+peakList <- c(gcapcPeakList[[1]], gcapcPeakList[[2]])
+consensusPeaks <- reduce(peakList,
+       drop.empty.ranges = TRUE,
+       min.gapwidth=1,
+       with.revmap=FALSE,
+       with.inframe.attrib=FALSE,
+       ignore.strand=TRUE)
+hist(width(consensusPeaks))
+```
+
+# Count fragments
+
+```{r}
+library(Rsubread)
+bamFiles <- list.files("/Volumes/tbDrive_kvdb/atacseq/calderon",
+                       pattern = "sorted.filtered.rmDup.bam",
+                       full.names = TRUE)
+
+ann <- data.frame(GeneID=paste0("peak",1:length(consensusPeaks)),
+                  Chr=as.vector(seqnames(consensusPeaks)),
+                  Start=start(consensusPeaks),
+                  End=end(consensusPeaks),
+                  Strand=rep("*", length(consensusPeaks)),
+                  stringsAsFactors=FALSE)
+fcResults <- featureCounts(bamFiles, 
+                           annot.ext = ann, 
+                           isPairedEnd = TRUE,
+                           countMultiMappingReads = FALSE, 
+                           maxFragLength = 1000)
+counts <- fcResults$counts
+saveRDS(fcResults, file="../../data/gcapc/fcResults.rds")
+```
+
+

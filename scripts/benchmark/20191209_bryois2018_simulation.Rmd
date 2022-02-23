@@ -63,13 +63,10 @@ counts <- counts[,-rmSamples]
 rm(data, start, end, peakSeqs) ; gc()
 ```
 
-
-
 # Mock comparison
 
-
 ```{r}
-bio <- droplevels(condition)
+bio <- droplevels(factor(condition))
 mockGroup <- splitSamples(bio)
 table(bio, mockGroup)
 
@@ -95,6 +92,9 @@ signalRes <- signalEvaluation(counts = countsMock,
                                gr = gr,
                                nTotal = 12,
                               cqnWithLength = FALSE)
+simData <- signalRes$simData
+saveRDS(simData, "../../data/simulatedData/bryois2018SimData.rds")
+signalRes <- signalRes[-which(names(signalRes) %in% "simData")]
 ```
 
 

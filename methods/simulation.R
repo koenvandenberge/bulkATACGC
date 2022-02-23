@@ -1,5 +1,6 @@
 ## startified split of samples according to bio variable
 splitSamples <- function(bio, seed=15){
+  set.seed(seed)
   grp <- rep(NA, length(bio)) # group assignments
   grpVals <- c("A", "B")
   for(bb in 1:nlevels(bio)){
@@ -180,6 +181,8 @@ evaluateSimulation <- function(simCounts,
   resNone <- testEdgeR(simCounts, design, tmm=FALSE)
   # upper-quartile
   resUQ <- testEdgeR(simCounts, design, tmm=FALSE, uq=TRUE)
+  # sum
+  resSum <- testEdgeR(simCounts, design, tmm=FALSE, uq=FALSE)
   # TMM
   resTMM <- testEdgeR(simCounts, design, tmm=TRUE)
   # DESeq2 MOR
@@ -208,6 +211,7 @@ evaluateSimulation <- function(simCounts,
   if(ruv){
     cbd <- COBRAData(pval = data.frame(none=resNone$table$PValue,
                                        uq=resUQ$table$PValue,
+                                       sum=resSum$table$PValue,
                                        TMM=resTMM$table$PValue,
                                        DESeq2=resDESeq2$pvalue,
                                        qsmooth=resQsmooth$table$PValue,
@@ -221,6 +225,7 @@ evaluateSimulation <- function(simCounts,
                      truth = truthDf)
   } else {
     cbd <- COBRAData(pval = data.frame(none=resNone$table$PValue,
+                                       sum=resSum$table$PValue,
                                        uq=resUQ$table$PValue,
                                        TMM=resTMM$table$PValue,
                                        DESeq2=resDESeq2$pvalue,
@@ -313,6 +318,26 @@ mockEvaluation <- function(simCounts,
   names(helDist) <- colnames(pval(evalMock))
   
   # p-value uniformity variability wrt GC: note confounding with mean count...
+  hellingerIk <- function(x, y, lower = -Inf, upper = Inf, method = 1, 
+                          subdivisions = 500L, ...){
+    # adapted function from statip::hellinger to increase subdivisions
+    fx <- statip::densityfun(x, ...)
+    fy <- statip::densityfun(y, ...)
+    if (method == 1) {
+      g <- function(z) (fx(z)^0.5 - fy(z)^0.5)^2
+      h2 <- stats::integrate(g, lower, upper, 
+                             subdivisions = subdivisions)$value/2
+    }
+    else if (method == 2) {
+      g <- function(z) (fx(z) * fy(z))^0.5
+      h2 <- 1 - stats::integrate(g, lower, upper, 
+                                 subdivisions = subdivisions)$value
+    }
+    else {
+      stop("incorrect 'method' argument", call. = FALSE)
+    }
+    sqrt(h2)
+  }
   fprGCList <- list()
   distGCList <- list()
   for(kk in 1:ncol(pval(evalMock))){
@@ -323,7 +348,12 @@ mockEvaluation <- function(simCounts,
       pvalBin <- pvals[gcGroups == levels(gcGroups)[bb]]
       hist(pvalBin, breaks=seq(0,1,length=20))
       fprBin[bb] <- mean(pvalBin <= 0.05)
-      helDistBin[bb] <- statip::hellinger(x=pvalBin, y=seq(0,1,length=length(pvalBin)))
+      helDistBin[bb] <- hellingerIk(x=pvalBin, 
+                                    y=seq(0,1,length=length(pvalBin)),
+                                    lower=0,
+                                    upper=1,
+                                    method=2,
+                                    subdivisions=500L)
     }
     fprGCList[[kk]] <- fprBin
     distGCList[[kk]] <- helDistBin
@@ -346,7 +376,9 @@ signalEvaluation <- function(counts,
                              grp,
                              gc,
                              gr,
-                             nTotal = 12, ...){
+                             nTotal = 12, 
+                             ...){
+  
   simData <- simulateData(counts = counts,
                           grp = grp,
                           nTotal = 12)
@@ -356,7 +388,8 @@ signalEvaluation <- function(counts,
                                        deId = simData$deId,
                                        simGC = gc,
                                        simWidth = width(gr),
-                                       grSim = gr, ...)
+                                       grSim = gr, 
+                                       ...)
   
   ## calculate two metrics: AUC under ROC or FDR-TPR, imbalance in DA peaks wrt GC-content
   ## AUROC
@@ -389,5 +422,7 @@ signalEvaluation <- function(counts,
   
   return(list(DAGCDistDiff = ecdfDiff, # how different is derived DA GC distribution from true distribution
               auroc = aucRes$auroc,
-              aufdptpr = aucRes$aufdptpr))
+              aufdptpr = aucRes$aufdptpr,
+              cbd = evalSimResults,
+              simData=simData))
 }

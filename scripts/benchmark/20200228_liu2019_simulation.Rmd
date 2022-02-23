@@ -105,6 +105,9 @@ signalRes <- signalEvaluation(counts = countsMock,
                                gc = gcContentPeaks,
                                gr = gr,
                                nTotal = 12)
+simData <- signalRes$simData
+saveRDS(simData, "../../data/simulatedData/liu2019SimData.rds")
+signalRes <- signalRes[-which(names(signalRes) %in% "simData")]
 ```
 
 

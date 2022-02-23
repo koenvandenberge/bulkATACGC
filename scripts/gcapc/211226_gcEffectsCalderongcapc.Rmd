@@ -1,0 +1,551 @@
+---
+title: "Sample-specific GC-content effects upon GC-aware peak calling"
+author: "Koen Van den Berge"
+date: "12/26/2021"
+output: html_document
+---
+
+```{r}
+library(GenomicAlignments)
+library(tidyverse)
+library(cqn)
+library(RColorBrewer)
+library(edgeR)
+library(ggplot2)
+library(cowplot)
+library(ggridges)
+library(gridExtra)
+colsBig <- clusterExperiment:::massivePalette
+plotGCHex <- function(gr, counts){
+  counts2 <- counts
+  df <- as_tibble(cbind(counts2,gc=mcols(gr)$gc))
+  df <- gather(df, sample, value, -gc)
+  ggplot(data=df, aes(x=gc, y=log(value+1)) ) + 
+    ylab("log(count + 1)") + xlab("GC-content") + 
+    geom_hex(bins = 50) + theme_bw() #+ facet_wrap(~sample, nrow=2)
+}
+pal <- RColorBrewer::brewer.pal(n=8, "Dark2")
+source("../../methods/gcqn_validated.R")
+
+### this dataset combines samples from a number of different sources, therefore the GC effects are wildly different between samples.
+data <- readRDS("../../data/gcapc/fcResults.rds")
+gr <- as(data$annotation, "GRanges")
+seqlevelsStyle(gr) <- "NCBI"
+counts <- data$counts
+
+# get GC content
+ff <- FaFile("~/data/genomes/human/Homo_sapiens.GRCh37.75.dna.primary_assembly.fa.gz")
+peakSeqs <- getSeq(x=ff, gr)
+gcContentPeaks <- letterFrequency(peakSeqs, "GC",as.prob=TRUE)[,1]
+gcGroups <- Hmisc::cut2(gcContentPeaks, g=20)
+mcols(gr)$gc <- gcContentPeaks
+widthGroups <- Hmisc::cut2(width(gr), g=20)
+
+
+dfGCWidth <- data.frame(gc=gcContentPeaks,
+                        width=width(gr))
+ggplot(dfGCWidth, aes(x=gc, y=log(width))) +
+  geom_hex() +
+  geom_smooth(se=FALSE, color="red", aes(group=1), lwd=1)
+```
+
+
+# Lowess fits
+
+## GC content
+
+```{r}
+
+lowListGC <- list()
+for(kk in 1:ncol(counts)){
+  set.seed(kk)
+  lowListGC[[kk]] <- lowess(x=gcContentPeaks, y=log1p(counts[,kk]), f=1/10)
+}
+```
+
+
+# Visualization
+
+```{r}
+dfList <- list()
+for(ss in 1:length(lowListGC)){
+  oox <- order(lowListGC[[ss]]$x)
+  dfList[[ss]] <- data.frame(x=lowListGC[[ss]]$x[oox], y=lowListGC[[ss]]$y[oox], sample=ss)
+}
+dfAll <- do.call(rbind, dfList)
+dfAll$sample <- factor(dfAll$sample)
+
+## association of GC content with counts
+plotGCHex(gr, rowMeans(counts)) +
+  theme(axis.title = element_text(size=16)) +
+  labs(fill="Nr. of peaks") + 
+  geom_line(aes(x=x, y=y, group=sample, color=sample), data=dfAll, size=1) +
+  scale_color_discrete()
+
+## just the average GC content
+p1 <- ggplot(dfAll, aes(x=x, y=y, group=sample, color=sample)) +
+  geom_line(size = 1) +
+  xlab("GC-content") +
+  ylab("log(count + 1)") +
+  theme_classic()
+```
+
+## Peak width
+
+```{r}
+lowListWidth <- list()
+for(kk in 1:ncol(counts)){
+  lowListWidth[[kk]] <- lowess(x=log(width(gr)), y=log1p(counts[,kk]), f=1/10)
+}
+
+plot(x=seq(min(log(width(gr))), max(log(width(gr))), length=10),
+     y=seq(0, 5, length=10), type='n',
+     xlab="Log peak width", ylab="log(count + 1)")
+for(kk in 1:length(lowListWidth)){
+  oo <- order(lowListWidth[[kk]]$x)
+  lines(x=lowListWidth[[kk]]$x[oo], y=lowListWidth[[kk]]$y[oo], col=colsBig[kk])
+}
+
+```
+
+
+
+
+# Mock comparisons
+
+```{r}
+# Mock comparison in paper is 
+## group A: 1001, 1003, 1008
+## group B: 1002, 1004, 1010
+
+# links are
+## 1001: SRR7650766	
+## 1002: SRR7650808
+## 1003: SRR7650848
+## 1004: SRR7650885
+## 1008: SRR7650913
+## 1010: SRR7650922
+
+colnames(counts) <- unlist(lapply(strsplit(colnames(counts), split=".", fixed=TRUE), "[[", 1))
+
+set.seed(33)
+mock <- factor(sample(rep(letters[1:2], each=3)))
+names(mock) <- colnames(counts)
+mock # agrees 
+design <- model.matrix(~mock)
+
+# filter
+keepMemContr <- rowSums(cpm(counts) >= 2) >=3 
+table(keepMemContr)
+countsMemControl <- counts[keepMemContr, ]
+# equally sized bins after filtering
+gcGroupsMem <- Hmisc::cut2(gcContentPeaks[keepMemContr], g=20)
+gcGroupsMem10 <- Hmisc::cut2(gcContentPeaks[keepMemContr], g=10)
+gcMem <- gcContentPeaks[keepMemContr]
+widthGroupsMem <- Hmisc::cut2(width(gr)[keepMemContr], g=20)
+```
+
+## No normalization
+
+```{r}
+## TMM normalization
+library(edgeR)
+d <- DGEList(countsMemControl)
+d <- estimateDisp(d, design)
+fit <- glmFit(d, design)
+lrt <- glmLRT(fit, coef=2) 
+dfEdgeR <- data.frame(logFC=log(2^lrt$table$logFC),
+                 gc=gcGroupsMem)
+pNone <- ggplot(dfEdgeR, aes(x=gc, y=logFC, color=gc)) +
+  geom_violin() +
+  geom_boxplot(width=0.1) +
+  scale_color_manual(values=wesanderson::wes_palette("Zissou1", nlevels(gcGroups), "continuous")) +
+  geom_abline(intercept = 0, slope = 0, col="black", lty=2) +
+  theme_bw() + 
+  ylim(c(-1,1)) +
+  ggtitle("No normalization") +
+  xlab("GC-content bin") +
+  theme(axis.text.x = element_text(angle = 45, vjust = .5),
+        legend.position = "none",
+        axis.title = element_text(size=16)) +
+  geom_smooth(se=FALSE, color="blue", aes(group=1), lwd=1)
+pNone
+
+
+dfEdgeRWidth <- data.frame(logFC=log(2^lrt$table$logFC),
+                 peakWidth=widthGroupsMem)
+
+pNoneWidth <- ggplot(dfEdgeRWidth, aes(x=peakWidth, y=logFC, color=peakWidth)) +
+  geom_violin() +
+  geom_boxplot(width=0.1) +
+  scale_color_manual(values=wesanderson::wes_palette("Zissou1", nlevels(dfEdgeRWidth$peakWidth), "continuous")) +
+  geom_abline(intercept = 0, slope = 0, col="black", lty=2) +
+  theme_bw() + 
+  ylim(c(-1,1)) +
+  ggtitle("No normalization") +
+  xlab("Peak width bin") +
+  theme(axis.text.x = element_text(angle = 45, vjust = .5),
+        legend.position = "none",
+        axis.title = element_text(size=16)) +
+  geom_smooth(se=FALSE, color="blue", aes(group=1), lwd=1)
+pNoneWidth
+
+```
+
+
+## edgeR (TMM normalization)
+
+```{r}
+## TMM normalization
+library(edgeR)
+d <- DGEList(countsMemControl)
+d <- calcNormFactors(d)
+d <- estimateDisp(d, design)
+fit <- glmFit(d, design)
+lrt <- glmLRT(fit, coef=2) 
+dfEdgeR <- data.frame(logFC=log(2^lrt$table$logFC),
+                 gc=gcGroupsMem)
+pedgeR <- ggplot(dfEdgeR, aes(x=gc, y=logFC, color=gc)) +
+  geom_violin() +
+  geom_boxplot(width=0.1) +
+  scale_color_manual(values=wesanderson::wes_palette("Zissou1", nlevels(gcGroups), "continuous")) +
+  geom_abline(intercept = 0, slope = 0, col="black", lty=2) +
+  theme_bw() + 
+  ylim(c(-1,1)) +
+  ggtitle("TMM normalization") +
+  xlab("GC-content bin") +
+  theme(axis.text.x = element_text(angle = 45, vjust = .5),
+        legend.position = "none",
+        axis.title = element_text(size=16)) +
+  geom_smooth(se=FALSE, color="blue", aes(group=1), lwd=1)
+pedgeR
+
+
+dfEdgeRWidth <- data.frame(logFC=log(2^lrt$table$logFC),
+                 peakWidth=widthGroupsMem)
+
+pedgeRWidth <- ggplot(dfEdgeRWidth, aes(x=peakWidth, y=logFC, color=peakWidth)) +
+  geom_violin() +
+  geom_boxplot(width=0.1) +
+  scale_color_manual(values=wesanderson::wes_palette("Zissou1", nlevels(dfEdgeRWidth$peakWidth), "continuous")) +
+  geom_abline(intercept = 0, slope = 0, col="black", lty=2) +
+  theme_bw() + 
+  ylim(c(-1,1)) +
+  ggtitle("TMM normalization") +
+  xlab("Peak width bin") +
+  theme(axis.text.x = element_text(angle = 45, vjust = .5),
+        legend.position = "none",
+        axis.title = element_text(size=16)) +
+  geom_smooth(se=FALSE, color="blue", aes(group=1), lwd=1)
+pedgeRWidth
+
+```
+
+## DESeq2 (MOR normalization)
+
+```{r}
+## DESeq2 normalization
+library(DESeq2)
+dds <- DESeqDataSetFromMatrix(countsMemControl, 
+                       colData=data.frame(mock=mock), 
+                       design=~mock)
+dds <- DESeq(dds)
+res <- results(dds, name="mock_b_vs_a")
+dfDESeq2 <- data.frame(logFC=log(2^res$log2FoldChange),
+                       gc=gcGroupsMem)
+pdeseq <- ggplot(dfDESeq2) +
+  aes(x=gc, y=logFC, color=gc) +
+  geom_violin() +
+  geom_boxplot(width=0.1) +
+  scale_color_manual(values=wesanderson::wes_palette("Zissou1", nlevels(gcGroups), "continuous")) +
+  geom_abline(intercept = 0, slope = 0, col="black", lty=2) +
+  theme_bw() + 
+  ylim(c(-1,1)) +
+  ggtitle("DESeq2 MOR normalization") +
+  xlab("GC-content bin") +
+  theme(axis.text.x = element_text(angle = 45, vjust = .5),
+        legend.position = "none",
+        axis.title = element_text(size=16)) +
+  geom_smooth(se=FALSE, color="blue", aes(group=1), lwd=1)
+pdeseq
+
+dfDESeq2Width <- data.frame(logFC=log(2^res$log2FoldChange),
+                 peakWidth=widthGroupsMem)
+
+pdeseqWidth <- ggplot(dfDESeq2Width, aes(x=peakWidth, y=logFC, color=peakWidth)) +
+  geom_violin() +
+  geom_boxplot(width=0.1) +
+  scale_color_manual(values=wesanderson::wes_palette("Zissou1", nlevels(dfDESeq2Width$peakWidth), "continuous")) +
+  geom_abline(intercept = 0, slope = 0, col="black", lty=2) +
+  theme_bw() + 
+  ylim(c(-1,1)) +
+  ggtitle("DESeq2 MOR normalization") +
+  xlab("Peak width bin") +
+  theme(axis.text.x = element_text(angle = 45, vjust = .5),
+        legend.position = "none",
+        axis.title = element_text(size=16)) +
+  geom_smooth(se=FALSE, color="blue", aes(group=1), lwd=1)
+pdeseqWidth
+
+```
+
+## Full quantile
+
+```{r}
+## Full quantile normalization
+countsFQ <- FQnorm(countsMemControl, type="median")
+d <- DGEList(countsFQ)
+d <- estimateDisp(d, design)
+fit <- glmFit(d, design)
+lrtFQ <- glmLRT(fit, coef=2) 
+dfFQ <- data.frame(logFC=log(2^lrtFQ$table$logFC),
+                      gc=gcGroupsMem)
+pFQ <- ggplot(dfFQ) +
+  aes(x=gc, y=logFC, color=gc) +
+  geom_violin() +
+  geom_boxplot(width=0.1) +
+  scale_color_manual(values=wesanderson::wes_palette("Zissou1", nlevels(gcGroups), "continuous")) +
+  geom_abline(intercept = 0, slope = 0, col="black", lty=2) +
+  theme_bw() + 
+  ylim(c(-1,1)) +
+  ggtitle("FQ normalization") +
+  xlab("GC-content bin") +
+  theme(axis.text.x = element_text(angle = 45, vjust = .5),
+        legend.position = "none",
+        axis.title = element_text(size=16)) +
+  geom_smooth(se=FALSE, color="blue", aes(group=1), lwd=1)
+pFQ
+
+dfFQWidth <- data.frame(logFC=log(2^lrtFQ$table$logFC),
+                 peakWidth=widthGroupsMem)
+
+pFQWidth <- ggplot(dfFQWidth, aes(x=peakWidth, y=logFC, color=peakWidth)) +
+  geom_violin() +
+  geom_boxplot(width=0.1) +
+  scale_color_manual(values=wesanderson::wes_palette("Zissou1", nlevels(dfFQWidth$peakWidth), "continuous")) +
+  geom_abline(intercept = 0, slope = 0, col="black", lty=2) +
+  theme_bw() + 
+  ylim(c(-1,1)) +
+  ggtitle("FQ normalization") +
+  xlab("Peak width bin") +
+  theme(axis.text.x = element_text(angle = 45, vjust = .5),
+        legend.position = "none",
+        axis.title = element_text(size=16)) +
+  geom_smooth(se=FALSE, color="blue", aes(group=1), lwd=1)
+pFQWidth
+
+```
+
+
+# Composite plot for figure 1
+
+```{r}
+p <- plot_grid(p1 + ggtitle("Memory NK cells"), pedgeR, 
+               pdeseq, pFQ,
+               labels=letters[1:4])
+p
+ggsave("~/Dropbox/research/atacseq/bulk/plots/figure1_gcapc.png",
+       units="in", width=12, height=9)
+
+pWidth <- plot_grid(pedgeRWidth, 
+               pdeseqWidth, pFQWidth,
+               labels=letters[1:3], 
+               ncol=1)
+pWidth
+ggsave("~/Dropbox/research/atacseq/bulk/plots/figure1Width_gcapc.png",
+       units="in", width=9, height=10)
+```
+
+
+
+
+
+
+# Figure 2
+
+```{r}
+
+##### FIGURE 2
+## cqn
+cqnModel <- cqn(countsMemControl, x=gcMem, sizeFactors = colSums(countsMemControl),
+                lengths=width(gr)[keepMemContr])
+d <- DGEList(countsMemControl)
+d$offset <- cqnModel$glm.offset
+d <- estimateDisp(d, design)
+fit <- glmFit(d, design)
+lrtCqn <- glmLRT(fit, coef=2)
+dfCqn <- data.frame(logFC=log(2^lrtCqn$table$logFC),
+                   gc=gcGroupsMem)
+pCqn <- ggplot(dfCqn) +
+  aes(x=gc, y=logFC, color=gc) +
+  geom_violin() +
+  geom_boxplot(width=0.1) +
+  scale_color_manual(values=wesanderson::wes_palette("Zissou1", nlevels(gcGroups), "continuous")) +
+  geom_abline(intercept = 0, slope = 0, col="black", lty=2) +
+  theme_bw() + 
+  ylim(c(-1,1)) +
+  xlab("GC-content bin") +
+  ggtitle("cqn normalization") +
+  theme(axis.text.x = element_text(angle = 45, vjust = .5),
+        legend.position = "none",
+        axis.title = element_text(size=16)) +
+  geom_smooth(se=FALSE, color="blue", aes(group=1), lwd=1)
+pCqn
+
+dfCqnWidth <- data.frame(logFC=log(2^lrtCqn$table$logFC),
+                   peakWidth=widthGroupsMem)
+pCqnWidth <- ggplot(dfCqnWidth, aes(x=peakWidth, y=logFC, color=peakWidth)) +
+  geom_violin() +
+  geom_boxplot(width=0.1) +
+  scale_color_manual(values=wesanderson::wes_palette("Zissou1", nlevels(dfCqnWidth$peakWidth), "continuous")) +
+  geom_abline(intercept = 0, slope = 0, col="black", lty=2) +
+  theme_bw() + 
+  ylim(c(-1,1)) +
+  xlab("Peak width bin") +
+  ggtitle("cqn normalization") +
+  theme(axis.text.x = element_text(angle = 45, vjust = .5),
+        legend.position = "none",
+        axis.title = element_text(size=16)) +
+  geom_smooth(se=FALSE, color="blue", aes(group=1), lwd=1)
+pCqnWidth
+
+# ## EDASeq
+library(EDASeq)
+#emptyRows <- which(rownames(countsMouse) == "")
+#rownames(countsMouse)[emptyRows] <- paste0("emptyPeak",1:length(emptyRows))
+dataWithin <- withinLaneNormalization(countsMemControl, y=gcMem,
+                                      num.bins=20, which="full")
+dataNorm <- betweenLaneNormalization(dataWithin, which="full")
+d <- DGEList(dataNorm)
+d <- estimateDisp(d, design)
+fit <- glmFit(d, design)
+lrtEDASeq <- glmLRT(fit, coef=2)
+dfEDASeq <- data.frame(logFC=log(2^lrtEDASeq$table$logFC),
+                    gc=gcGroupsMem)
+pEDASeq <- ggplot(dfEDASeq) +
+  aes(x=gc, y=logFC, color=gc) +
+  geom_violin() +
+  geom_boxplot(width=0.1) +
+  scale_color_manual(values=wesanderson::wes_palette("Zissou1", nlevels(gcGroups), "continuous")) +
+  geom_abline(intercept = 0, slope = 0, col="black", lty=2) +
+  theme_bw() +
+  ylim(c(-1,1)) +
+  xlab("GC-content bin") +
+  ggtitle("FQ-FQ normalization") +
+  theme(axis.text.x = element_text(angle = 45, vjust = .5),
+        legend.position = "none",
+        axis.title = element_text(size=16)) +
+  geom_smooth(se=FALSE, color="blue", aes(group=1), lwd=1)
+pEDASeq
+
+dfEDASeqWidth <- data.frame(logFC=log(2^lrtEDASeq$table$logFC),
+                   peakWidth=widthGroupsMem)
+pEDASeqWidth <- ggplot(dfEDASeqWidth, aes(x=peakWidth, y=logFC, color=peakWidth)) +
+  geom_violin() +
+  geom_boxplot(width=0.1) +
+  scale_color_manual(values=wesanderson::wes_palette("Zissou1", nlevels(dfCqnWidth$peakWidth), "continuous")) +
+  geom_abline(intercept = 0, slope = 0, col="black", lty=2) +
+  theme_bw() + 
+  ylim(c(-1,1)) +
+  xlab("Peak width bin") +
+  ggtitle("FQ-FQ normalization") +
+  theme(axis.text.x = element_text(angle = 45, vjust = .5),
+        legend.position = "none",
+        axis.title = element_text(size=16)) +
+  geom_smooth(se=FALSE, color="blue", aes(group=1), lwd=1)
+pEDASeqWidth
+
+
+## GC-QN
+countsGCQN <- gcqn(countsMemControl, gcGroupsMem, summary = "median")
+d <- DGEList(countsGCQN)
+d <- estimateDisp(d, design)
+fit <- glmFit(d, design)
+lrtGCQN <- glmLRT(fit, coef=2)
+dfGCQN <- data.frame(logFC=log(2^lrtGCQN$table$logFC),
+                   gc=gcGroupsMem)
+pGCQN <- ggplot(dfGCQN) +
+  aes(x=gc, y=logFC, color=gc) +
+  geom_violin() +
+  geom_boxplot(width=0.1) +
+  scale_color_manual(values=wesanderson::wes_palette("Zissou1", nlevels(gcGroups), "continuous")) +
+  geom_abline(intercept = 0, slope = 0, col="black", lty=2) +
+  theme_bw() + 
+  ylim(c(-1,1)) +
+  xlab("GC-content bin") +
+  ggtitle("GC-FQ normalization") +
+  theme(axis.text.x = element_text(angle = 45, vjust = .5),
+        legend.position = "none",
+        axis.title = element_text(size=16)) +
+  geom_smooth(se=FALSE, color="blue", aes(group=1), lwd=1)
+pGCQN
+
+dfGCQNWidth <- data.frame(logFC=log(2^lrtGCQN$table$logFC),
+                   peakWidth=widthGroupsMem)
+pGCQNWidth <- ggplot(dfGCQNWidth, aes(x=peakWidth, y=logFC, color=peakWidth)) +
+  geom_violin() +
+  geom_boxplot(width=0.1) +
+  scale_color_manual(values=wesanderson::wes_palette("Zissou1", nlevels(dfCqnWidth$peakWidth), "continuous")) +
+  geom_abline(intercept = 0, slope = 0, col="black", lty=2) +
+  theme_bw() + 
+  ylim(c(-1,1)) +
+  xlab("Peak width bin") +
+  ggtitle("GC-FQ normalization") +
+  theme(axis.text.x = element_text(angle = 45, vjust = .5),
+        legend.position = "none",
+        axis.title = element_text(size=16)) +
+  geom_smooth(se=FALSE, color="blue", aes(group=1), lwd=1)
+pGCQNWidth
+
+## ridges plot before normalization
+countsN <- countsMemControl[,order(colSums(countsMemControl), decreasing=TRUE)[1:3]]
+
+
+lc <- log1p(c(countsN))
+joyDat <- data.frame(lc=lc, 
+                     gc=rep(gcGroupsMem10, 3),
+                     sample=rep(1:3, each=nrow(countsN)))
+axText <- 0
+pRidge1 <- joyDat %>% ggplot(aes(y=gc)) + 
+  geom_density_ridges(aes(x=lc)) + 
+  facet_wrap(.~sample) +
+  theme_ridges(grid=FALSE, font_size=5, center_axis_labels = TRUE) + 
+  xlim(c(0.5,7)) +
+  xlab("log(count + 1)") +
+  ylab("GC-content bin") +
+  theme(axis.text.y = element_text(size=axText),
+        axis.text.x = element_text(size=10),
+        legend.position = "none",
+        axis.title = element_text(size=16), 
+             strip.background = element_blank(),
+             strip.text.x = element_blank())
+
+pFC <- cowplot::plot_grid(pCqn, pEDASeq, pGCQN,
+                          labels=letters[2:4],
+                          nrow=3, ncol=1)
+
+pFCAlone <- cowplot::plot_grid(pCqn, pEDASeq, pGCQN,
+                          labels=letters[1:3],
+                          nrow=3, ncol=1)
+ggsave("~/Dropbox/research/atacseq/bulk/plots/figure2_lfc_gcapc.png",
+        units="in", width=9, height=9)
+
+pFig2 <- cowplot::plot_grid(pRidge1, 
+                   pFC,
+                   labels=c("a",""))
+pFig2
+ggsave("~/Dropbox/research/atacseq/bulk/plots/figure2_gcapc.png",
+        units="in", width=12, height=9)
+
+pWidth2 <- cowplot::plot_grid(pCqnWidth, pEDASeqWidth, pGCQNWidth,
+                          labels=letters[1:3],
+                          nrow=3, ncol=1)
+pWidth2
+ggsave("~/Dropbox/research/atacseq/bulk/plots/figure2Width_gcapc.png",
+       units="in", width=9, height=10)
+```
+
+
+
+
+

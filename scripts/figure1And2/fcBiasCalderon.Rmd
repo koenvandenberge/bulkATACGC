@@ -37,7 +37,7 @@ sn <- unlist(lapply(lapply(strsplit(rn,split="_"),"[",1),function(x) gsub(patter
 start <- as.numeric(unlist(lapply(strsplit(rn,split="_"),"[",2)))
 end <- as.numeric(unlist(lapply(strsplit(rn,split="_"),"[",3)))
 gr <- GRanges(seqnames=sn, ranges=IRanges(start, end), strand="*", mcols=data.frame(peakID=rn))
-ff <- FaFile("~/data/genomes/human/Homo_sapiens.GRCh37.75.dna_sm.primary_assembly.fa")
+ff <- FaFile("~/data/genomes/human/Homo_sapiens.GRCh37.75.dna.primary_assembly.fa.gz")
 peakSeqs <- getSeq(x=ff, gr)
 gcContentPeaks <- letterFrequency(peakSeqs, "GC",as.prob=TRUE)[,1]
 gcGroups <- Hmisc::cut2(gcContentPeaks, g=20)
@@ -108,7 +108,8 @@ exploreFCBias <- function(curCounts, gcContentPeaks){
     xlab("GC-content bin") +
     theme(axis.text.x = element_text(angle = 45, vjust = .5),
           legend.position = "none",
-          axis.title = element_text(size=16))
+          axis.title = element_text(size=16)) +
+  geom_smooth(se=FALSE, color="blue", aes(group=1), lwd=1)
   pedgeR
   
   ## DESeq2 normalization
@@ -132,7 +133,8 @@ exploreFCBias <- function(curCounts, gcContentPeaks){
     xlab("GC-content bin") +
     theme(axis.text.x = element_text(angle = 45, vjust = .5),
           legend.position = "none",
-          axis.title = element_text(size=16))
+          axis.title = element_text(size=16)) +
+  geom_smooth(se=FALSE, color="blue", aes(group=1), lwd=1)
   pdeseq
   
   ## Full quantile normalization
@@ -155,7 +157,8 @@ exploreFCBias <- function(curCounts, gcContentPeaks){
     xlab("GC-content bin") +
     theme(axis.text.x = element_text(angle = 45, vjust = .5),
           legend.position = "none",
-          axis.title = element_text(size=16))
+          axis.title = element_text(size=16)) +
+  geom_smooth(se=FALSE, color="blue", aes(group=1), lwd=1)
   pFQ
   
   p1 <- cowplot::plot_grid(pedgeR, pdeseq, pFQ, nrow=1, ncol=3)
@@ -184,7 +187,8 @@ exploreFCBias <- function(curCounts, gcContentPeaks){
     ggtitle("cqn normalization") +
     theme(axis.text.x = element_text(angle = 45, vjust = .5),
           legend.position = "none",
-          axis.title = element_text(size=16))
+          axis.title = element_text(size=16)) +
+  geom_smooth(se=FALSE, color="blue", aes(group=1), lwd=1)
   
   # ## EDASeq
   library(EDASeq)
@@ -209,7 +213,8 @@ exploreFCBias <- function(curCounts, gcContentPeaks){
     ggtitle("FQ-FQ normalization") +
     theme(axis.text.x = element_text(angle = 45, vjust = .5),
           legend.position = "none",
-          axis.title = element_text(size=16))
+          axis.title = element_text(size=16)) +
+  geom_smooth(se=FALSE, color="blue", aes(group=1), lwd=1)
   
   
   ## GC-QN
@@ -232,7 +237,8 @@ exploreFCBias <- function(curCounts, gcContentPeaks){
     ggtitle("GC-FQ normalization") +
     theme(axis.text.x = element_text(angle = 45, vjust = .5),
           legend.position = "none",
-          axis.title = element_text(size=16))
+          axis.title = element_text(size=16)) +
+  geom_smooth(se=FALSE, color="blue", aes(group=1), lwd=1)
   
   p2 <- cowplot::plot_grid(pCqn, pEDASeq, pGCQN, nrow=1, ncol=3)
   p2

@@ -58,6 +58,7 @@ ff <- FaFile("~/data/genomes/mouse/Mus_musculus.NCBIM37.67.dna.toplevel.fa")
 peakSeqs <- getSeq(x=ff, gr)
 gcContentPeaks <- letterFrequency(peakSeqs, "GC",as.prob=TRUE)[,1]
 gcGroups <- Hmisc::cut2(gcContentPeaks, g=20)
+gcGroups50 <- Hmisc::cut2(gcContentPeaks, g=50)
 mcols(gr)$gc <- gcContentPeaks
 hist(gcContentPeaks, xlab="GC content", breaks=40)
 
@@ -138,14 +139,13 @@ rm(wit)
 # GC-QN
 
 ```{r}
-gcGroups <- Hmisc::cut2(gcContentPeaks, g=50)
-normCountsGcqn <- gcqn(counts, gcGroups, "median")
+normCountsGcqn <- gcqn(counts, gcGroups50, "median")
 ```
 
 ## Smooth GC-QN
 
 ```{r}
-normCountsGcqnSmooth <- gcqn_qsmooth(counts, gcGroups, bio=tissue)
+normCountsGcqnSmooth <- gcqn_qsmooth(counts, gcGroups50, bio=tissue)
 ```
 
 
@@ -299,6 +299,7 @@ gcBoxplot <- function(df, title){
   geom_boxplot(width=0.1) +
   scale_color_manual(values=wesanderson::wes_palette("Zissou1", nlevels(df$gc), "continuous")) +
   geom_abline(intercept = 0, slope = 0, col="black", lty=2) +
+  geom_smooth(se=FALSE, color="blue", aes(group=1), lwd=1) +
   theme_bw() +
   ylim(c(-2,2)) +
   xlab("GC-content bin") +
@@ -324,7 +325,7 @@ for(ii in 1:length(resList)){
   }
 }
 cowplot::plot_grid(plotlist = pBoxList)
-ggsave("~/Dropbox/research/atacseq/bulk/plots/liu_foldChange_ggplot.png", width=8, height=7)
+# ggsave("~/Dropbox/research/atacseq/bulk/plots/liu_foldChange_ggplot.png", width=8, height=7)
 # dev.off()
 
 ### check distribution of GC-content for top 5000 peaks.
@@ -339,26 +340,66 @@ for(ii in 1:length(resList)){
     ## edgeR
     topPeaks <- order(tab$table$LR, decreasing=TRUE)[1:5e3]
   }
-  barplot(table(gcGroups[topPeaks]), ylim=c(0,250), main=names(resList)[ii], xaxt="n", xlab="GC-content bin", ylab="Nr. of peaks")
+  barplot(table(gcGroups50[topPeaks]), ylim=c(0,250), main=names(resList)[ii], xaxt="n", xlab="GC-content bin", ylab="Nr. of peaks")
+}
+# dev.off()
+
+# pdf("~/Dropbox/research/atacseq/bulk/plots/liu_topPeaks_density.pdf", width=8)
+mypar(mfrow=c(3,3))
+for(ii in 1:length(resList)){
+  tab <- resList[[ii]]
+  if(ii == 2){
+    ## DESeq2
+    topPeaks <- order(tab$stat, decreasing=TRUE)[1:5e3]
+  } else {
+    ## edgeR
+    topPeaks <- order(tab$table$LR, decreasing=TRUE)[1:5e3]
+  }
+  plot(density(gcContentPeaks[topPeaks]), main=names(resList)[ii], xlab="GC-content")
+}
+# dev.off()
+
+# pdf("~/Dropbox/research/atacseq/bulk/plots/liu_topPeaks_density_singlePanel.pdf", width=8)
+mypar(mfrow=c(1,1))
+for(ii in 1:length(resList)){
+  tab <- resList[[ii]]
+  if(ii == 2){
+    ## DESeq2
+    topPeaks <- order(tab$stat, decreasing=TRUE)[1:5e3]
+  } else {
+    ## edgeR
+    topPeaks <- order(tab$table$LR, decreasing=TRUE)[1:5e3]
+  }
+  if(ii == 1) plot(density(gcContentPeaks[topPeaks]),
+                   main = "GC-content distribution of top 5000 peaks", 
+                   xlab="GC-content", 
+                   ylim=c(0,9), bty='l', lwd=3/2, col=ii)
+  if(ii > 1) lines(density(gcContentPeaks[topPeaks]), xlab="GC-content bin", 
+                   col=ii, lwd=3/2)
+  legend("topright", legend=names(resList), col=1:8, lty=1, lwd=2, bty='n', cex=2/3)
 }
 # dev.off()
 
 # all significant peaks
 nrPeaks <- c()
+daPeaks <- list()
 mypar(mfrow=c(3,3))
 for(ii in 1:length(resList)){
   tab <- resList[[ii]]
   if(ii == 2){
     ## DESeq2
     sigPeaks <- which(tab$padj <= 0.05)
+    daPeaks[[ii]] <- sigPeaks
   } else {
     ## edgeR
     sigPeaks <- which(p.adjust(tab$table$PValue, "fdr") <= 0.05)
+    daPeaks[[ii]] <- sigPeaks
   }
   barplot(table(gcGroups[sigPeaks]), ylim=c(0,3200), main=names(resList)[ii], xaxt="n", xlab="GC-content bin")
   nrPeaks[ii] <- length(sigPeaks)
 }
 nrPeaks
+names(daPeaks) <- names(resList)
 
 # all significant peaks: relative
 # pdf("~/Dropbox/research/atacseq/bulk/plots/liu_relnrPeaks.pdf", width=8)
@@ -373,7 +414,7 @@ for(ii in 1:length(resList)){
     sigPeaks <- which(p.adjust(tab$table$PValue, "fdr") <= 0.05)
   }
   
-  barplot(table(gcGroups[sigPeaks]) / table(gcGroups[sigPeaks])[1], ylim=c(0,4), main=paste0(names(resList)[ii],": \n ~", round(nrPeaks[ii]/1e3),"k DA peaks"),
+  barplot(table(gcGroups50[sigPeaks]) / table(gcGroups50[sigPeaks])[1], ylim=c(0,4), main=paste0(names(resList)[ii],": \n ~", round(nrPeaks[ii]/1e3),"k DA peaks"),
           xaxt="n", yaxt='n', xlab="GC-content bin")
   axis(side=2, at=c(0,1,2,3))
   title(ylab="Relative # peaks", line=1.3, cex.lab=3/2)
@@ -385,6 +426,166 @@ names(nrPeaks) <- names(resList)
 barplot(nrPeaks, las=2)
 ```
 
+## Check overlap of features
 
+```{r}
+library(ChIPpeakAnno)
+library(TxDb.Mmusculus.UCSC.mm9.knownGene)
+library(EnsDb.Mmusculus.v79)
+library(org.Mm.eg.db)
+data("TSS.mouse.GRCm38")
+peakFeaturesAll <- suppressWarnings(assignChromosomeRegion(gr, nucleotideLevel=FALSE,
+                                                  TxDb=TxDb.Mmusculus.UCSC.mm9.knownGene))
+barplot(peakFeaturesAll$percentage, las=1) # across all peaks
+
+## for the DA peaks of each method
+peakFeaturesList <- list()
+for(kk in 1:length(daPeaks)){
+  peakFeaturesList[[kk]] <- suppressWarnings(assignChromosomeRegion(gr[daPeaks[[kk]]],
+                                                                    nucleotideLevel=FALSE,
+                                                  TxDb=TxDb.Mmusculus.UCSC.mm9.knownGene)$percentage)
+}
+names(peakFeaturesList) <- names(daPeaks)
+
+df <- data.frame(feature = unlist(lapply(peakFeaturesList, names)),
+                 percentage = unlist(peakFeaturesList),
+                 method = rep(names(peakFeaturesList), each=7))
+ggplot(df, aes(x=1,y=percentage, col=method)) +
+  theme_classic() +
+  geom_jitter(width=.1, height=0) +
+  facet_wrap(.~feature, scales="free_y") +
+  xlim(c(0.7, 1.3)) +
+  theme(axis.title.x=element_blank(),
+        axis.text.x=element_blank(),
+        axis.ticks.x=element_blank(),
+        axis.line.x = element_blank())
+
+# wrt all peaks
+peakFeaturesList2 <- list()
+for(kk in 1:length(peakFeaturesList)){
+  peakFeaturesList2[[kk]] <- peakFeaturesList[[kk]] / peakFeaturesAll$percentage
+}
+names(peakFeaturesList2) <- names(peakFeaturesList)
+df <- data.frame(feature = unlist(lapply(peakFeaturesList2, names)),
+                 enrichment = unlist(peakFeaturesList2),
+                 method = rep(names(peakFeaturesList2), each=7))
+ggplot(df, aes(x=1,y=enrichment, col=method)) +
+  theme_classic() +
+  geom_jitter(width=.1, height=0) +
+  facet_wrap(.~feature, scales="free_y") +
+  xlim(c(0.7, 1.3)) +
+  theme(axis.title.x=element_blank(),
+        axis.text.x=element_blank(),
+        axis.ticks.x=element_blank(),
+        axis.line.x = element_blank())
+# ggsave("~/Dropbox/research/atacseq/bulk/plots/liu_genomicFeaturesEnrichment.pdf",
+#        width=7, height=5)
+
+df$gcAware <- NULL
+df$gcAware[df$method %in% c("Raw","DESeq2", "EdgeR", "FQ")] <- "no"
+df$gcAware[df$method %in% c("FQ-FQ","GC-FQ", "smooth GC-FQ")] <- "yes"
+df <- df[!is.na(df$gcAware),]
+#df$gcAware[is.na(df$gcAware)] <- "cqn"
+df$gcAware <- factor(df$gcAware)
+
+ggplot(df, aes(x=gcAware,y=enrichment)) +
+  theme_classic() +
+  geom_boxplot() +
+  geom_point() +
+  facet_wrap(.~feature, scales="free_y") +
+  xlab("GC-aware normalization")
+# ggsave("~/Dropbox/research/atacseq/bulk/plots/liu_genomicFeaturesEnrichment_boxplots.pdf",
+#        width=7, height=5)
+```
+
+
+## Check motifs
+
+```{r}
+# get motifs
+library(JASPAR2020)
+library(TFBSTools)
+library(motifmatchr)
+opts <- list()
+opts[["tax_group"]] <- "vertebrates"
+opts[["collection"]] <- "CORE"
+opts[["all_versions"]] <- FALSE
+motifsToScan <- getMatrixSet(JASPAR2020, opts)
+
+## motif enrichment
+library(chromVAR)
+library(BSgenome.Mmusculus.UCSC.mm9)
+library(SummarizedExperiment)
+library(pheatmap)
+
+topListMotifs <- list()
+chromvarList <- list()
+for(kk in 1:length(daPeaks)){
+  curPeaks <- gr[daPeaks[[kk]]]
+  # add chr 
+  curPeaks2 <- GRanges(seqnames = paste0("chr", seqnames(curPeaks)),
+                      ranges = ranges(curPeaks),
+                      strand = strand(curPeaks))
+  curCounts <- counts[daPeaks[[kk]],]
+  keep <- rowSums(curCounts) > 10
+  curCounts <- curCounts[keep,]
+  curPeaks2 <- curPeaks2[keep]
+  se <- SummarizedExperiment(assays = list("counts"=curCounts),
+                             rowRanges=curPeaks2)
+  se <- addGCBias(se, 
+                  genome = BSgenome.Mmusculus.UCSC.mm9)
+  motifs <- matchMotifs(motifsToScan, se, genome = BSgenome.Mmusculus.UCSC.mm9)
+  deviations <- computeDeviations(object = se, annotations = motifs)
+  chromvars <- computeVariability(deviations)
+  ## investigate top
+  chromvars <- chromvars[order(chromvars$p_value), ]
+  chromvars[1:10, ]
+  devZscores <- deviationScores(deviations)
+  topVariable <- chromvars[1:100, ]
+  chromvarList[[kk]] <- chromvars
+  devTop <- merge(topVariable[, 1, drop = FALSE], devZscores, by = 0)
+  devTop[1:2, ]
+  devToPlot <- as.matrix(devTop[, -c(1:2)])
+  rownames(devToPlot) <- devTop[, 2]
+  pheatmap(devToPlot)
+  topListMotifs[[kk]] <- devToPlot
+}
+names(topListMotifs) <- names(daPeaks)
+
+breaks <- c(-60, seq(-40,40,by=1), 60)
+for(kk in 1:length(topListMotifs)){
+  mat <- topListMotifs[[kk]]
+  colnames(mat) <- as.character(tissue)
+  pheatmap(mat, main=names(daPeaks)[kk],
+           breaks = breaks, border=NA)
+}
+
+## only liver and heart
+diffList <- list()
+for(kk in 1:length(topListMotifs)){
+  mat <- topListMotifs[[kk]]
+  colnames(mat) <- as.character(tissue)
+  mat <- mat[,colnames(mat) %in% c("Liver", "Heart")]
+  pheatmap(mat, main=names(daPeaks)[kk],
+           breaks = breaks, border=NA)
+  diffs <- rowMeans(mat[,colnames(mat) == "Heart"]) - rowMeans(mat[,colnames(mat) == "Liver"])
+  diffList[[kk]] <- diffs
+}
+names(diffList) <- names(topListMotifs)
+diffMat <- abs(do.call(cbind, diffList))
+diffMat <- diffMat[,order(apply(diffMat,2,median))]
+boxplot(abs(diffMat))
+
+# top and all enriched motifs are very similar across methods.
+library(UpSetR)
+upset(fromList(lapply(topListMotifs, rownames)),
+              order.by="freq", nsets=length(daPeaks))
+
+enrichedTFs <- lapply(chromvarList, function(x) x$name[x$p_value_adj <= 0.05])
+names(enrichedTFs) <- names(daPeaks)
+enrichedTFs <- lapply(enrichedTFs, as.character)
+upset(fromList(enrichedTFs),
+              order.by="freq", nsets=length(daPeaks))
+```
 
 

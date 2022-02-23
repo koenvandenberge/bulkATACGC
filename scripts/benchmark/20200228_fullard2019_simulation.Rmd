@@ -113,6 +113,9 @@ signalRes <- signalEvaluation(counts = countsMock,
                                gc = gcContentPeaks,
                                gr = gr,
                                nTotal = 12)
+simData <- signalRes$simData
+saveRDS(simData, "../../data/simulatedData/fullard2019SimData.rds")
+signalRes <- signalRes[-which(names(signalRes) %in% "simData")]
 ```
 
 
@@ -124,95 +127,4 @@ signalRes <- signalEvaluation(counts = countsMock,
 ```{r}
 resultList <- list(mockEvalRes, signalRes)
 saveRDS(resultList, file="../../objects/fullard2019_simulationResults.rds")
-```
-
-
-```{r oldMock, eval=FALSE}
-# DA on mock
-evalMock <- evaluateSimulation(simCounts = countsMock,
-                                grpSim = mockGroup,
-                                deId = NULL,
-                                simGC = gcContentPeaks,
-                                simWidth = width(gr),
-                                grSim = gr,
-                               ruv=FALSE)
-
-## calculate three metrics: FPR, p-value uniformity, p-value uniformity variability wrt GC.
-rafalib::mypar(mfrow=c(4,2))
-for(kk in 1:ncol(pval(evalMock))) hist(pval(evalMock)[,kk], breaks=20, main=colnames(pval(evalMock))[kk])
-# FPR: DA peaks at 5% nominal level
-fpr <- apply(pval(evalMock), 2, function(x) mean(x <= 0.05))
-fpr
-
-# p-value uniformity
-helDist <- c()
-for(kk in 1:ncol(pval(evalMock))){
-  curP <- pval(evalMock)[,kk]
-  x <- cbind(curP, seq(0,1,length=length(curP)))
-  helDist[kk] <- statip::hellinger(x=curP, y=seq(0,1,length=length(curP)))
-}
-names(helDist) <- colnames(pval(evalMock))
-
-# p-value uniformity variability wrt GC: note confounding with mean count...
-fprGCList <- list()
-distGCList <- list()
-for(kk in 1:ncol(pval(evalMock))){
-  pvals <- pval(evalMock)[,kk]
-  rafalib::mypar(mfrow=c(5,4))
-  fprBin <- helDistBin <- c()
-  for(bb in 1:nlevels(gcGroups)){
-    pvalBin <- pvals[gcGroups == levels(gcGroups)[bb]]
-    hist(pvalBin, breaks=seq(0,1,length=20))
-    fprBin[bb] <- mean(pvalBin <= 0.05)
-    helDistBin[bb] <- statip::hellinger(x=pvalBin, y=seq(0,1,length=length(pvalBin)))
-  }
-  fprGCList[[kk]] <- fprBin
-  distGCList[[kk]] <- helDistBin
-}
-names(fprGCList) <- names(distGCList) <- colnames(pval(evalMock))
-helDistVar <- unlist(lapply(distGCList, var))
-rafalib::mypar(mfrow=c(4,2))
-lapply(fprList, plot, type='b')
-```
-
-```{r oldSignal, eval=FALSE}
-simData <- simulateData(counts = countsMock,
-                           grp = mockGroup,
-                           nTotal = 12)
-
-evalSimResults <- evaluateSimulation(simCounts = simData$simCounts,
-                                     grpSim = simData$grp,
-                                     deId = simData$deId,
-                                     simGC = gcContentPeaks,
-                                     simWidth = width(gr),
-                                     grSim = gr)
-
-## calculate two metrics: AUC under ROC or FDR-TPR, imbalance in DA peaks wrt GC-content
-## AUROC
-aucRes <- calcAUC(evalSimResults)
-aucRes
-
-## imbalance in DA peaks wrt GC content
-cbd <- iCOBRA::calculate_adjp(evalSimResults)
-padj <- iCOBRA::padj(cbd)
-daPeaksGC <- apply(padj, 2, function(x){
-  gcContentPeaks[which(x <= 0.05)]
-})
-rafalib::mypar(mfrow=c(3,3))
-for(kk in 1:length(daPeaksGC)){
-  if(length(daPeaksGC[[kk]]) == 0) next
-  hist(daPeaksGC[[kk]], breaks = 20, xlim=c(0.2, 0.8), main=names(daPeaksGC)[kk])
-}
-# measure of how different the distributions are to the truth
-trueGC <- gcContentPeaks[simData$deId]
-hist(trueGC, breaks=20) # true distribution
-decdf <- function(x, true, sample)  ecdf(true)(x) - ecdf(sample)(x)
-grid <- seq(min(trueGC), max(trueGC), length=100)
-ecdfDiff <- unlist(lapply(daPeaksGC, function(x){
-  if(length(x) == 0) return(NA)
-  sum(abs(decdf(x = grid,
-      true = trueGC,
-      sample = x)))
-}))
-ecdfDiff
 ```

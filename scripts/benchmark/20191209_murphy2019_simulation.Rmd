@@ -69,16 +69,15 @@ table(bio, mockGroup)
 keepSamplesMock <- which(!is.na(mockGroup))
 countsMock <- counts[,keepSamplesMock]
 mockGroup <- mockGroup[keepSamplesMock]
+```
 
+```{r}
 mockEvalRes <- mockEvaluation(simCounts = countsMock,
                                grpSim = mockGroup,
                                simGC = gcContentPeaks,
                                simWidth = width(gr),
                                grSim = gr)
 ```
-
-
-
 
 # Simulate data to add signal
 
@@ -88,6 +87,9 @@ signalRes <- signalEvaluation(counts = countsMock,
                                gc = gcContentPeaks,
                                gr = gr,
                                nTotal = 12)
+simData <- signalRes$simData
+saveRDS(simData, "../../data/simulatedData/murphy2019SimData.rds")
+signalRes <- signalRes[-which(names(signalRes) %in% "simData")]
 ```
 
 
@@ -104,3 +106,5 @@ saveRDS(resultList, file="../../objects/murphy2019_simulationResults.rds")
 ```{r}
 sessionInfo()
 ```
+
+

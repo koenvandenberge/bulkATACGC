@@ -88,8 +88,14 @@ simulationScores <- sapply(1:length(simulationResultFiles), function(ii){
   readRDS(simulationResultFiles[ii])
 }, simplify = FALSE)
 names(simulationScores) <- datasets
+# extract cbd
+cbdList <- list()
+for(kk in 1:length(simulationScores)){
+  cbdList[[kk]] <- simulationScores[[kk]][[2]]$cbd
+}
+names(cbdList) <- datasets
 # remove unused metrics
-rmMetricsSim <- "aufdptpr"
+rmMetricsSim <- c("aufdptpr", "cbd")
 simulationScores <- lapply(simulationScores, function(scoreList){
   scoreList[[2]] <- scoreList[[2]][!names(scoreList[[2]]) %in% rmMetricsSim]
   return(scoreList)
@@ -259,8 +265,8 @@ cowplot::plot_grid(plotlist = pDat,
                    labels=dats,
                    label_size = 11,
                    label_x = -0.025)
-# ggsave("~/Dropbox/research/atacseq/bulk/plots/totalBenchmarkPerDataset.pdf",
-#        height = 14, width = 12)
+ggsave("~/Dropbox/research/atacseq/bulk/plots/totalBenchmarkPerDataset.pdf",
+       height = 14, width = 12)
 
 ```
 
@@ -366,8 +372,27 @@ cowplot::plot_grid(pNormAll, pDAAll, pGCAll,
                      nrow = 1,
                      rel_widths = c(1.5, 1, 1))
 
-# ggsave("~/Dropbox/research/atacseq/bulk/plots/totalBenchmarkSummary.pdf",
-#        height = 6, width = 12)
+ggsave("~/Dropbox/research/atacseq/bulk/plots/totalBenchmarkSummary.pdf",
+       height = 6, width = 12)
+
+library(cowplot)
+imgFile <- "/Users/koenvandenberge/Dropbox/research/atacseq/bulk/plots/benchmarkSchemev1.png"
+pScheme <- ggdraw() +
+            draw_image(imgFile,
+                       scale=1)
+
+
+pHeat <- cowplot::plot_grid(pNormAll, pDAAll, pGCAll,
+                     nrow = 1,
+                     rel_widths = c(1.5, 1, 1))
+
+cowplot::plot_grid(pScheme,
+                   pHeat,
+                   nrow=2,
+                   labels=letters[1:2],
+                   rel_heights = c(3/4, 1))
+ggsave("~/Dropbox/research/atacseq/bulk/plots/totalBenchmarkSummary_scheme.pdf",
+       height = 15, width = 12)
 ```
 
 ## Include global overview
@@ -473,8 +498,8 @@ cowplot::plot_grid(pNormAll, pDAAll,
                      nrow = 1,
                      rel_widths = c(1.5, 1))
 
-# ggsave("~/Dropbox/research/atacseq/bulk/plots/totalBenchmarkSummary_noGC.pdf",
-#        height = 6, width = 10)
+ggsave("~/Dropbox/research/atacseq/bulk/plots/totalBenchmarkSummary_noGC.pdf",
+       height = 6, width = 10)
 ```
 
 ## For each benchmark component separately
@@ -599,4 +624,216 @@ cowplot::plot_grid(pNormOnly,
 ggsave("~/Dropbox/research/atacseq/bulk/plots/totalBenchmark_perComponent.pdf",
        width = 12, height = 6)
 ```
+
+# Concordance analysis on DA peaks
+
+```{r}
+calcJaccard <- function(x, y){
+  sum(which(x) %in% which(y)) / length(unique(c(which(x), which(y))))
+}
+pairwiseJaccard <- function(mat){
+  combs <- combn(x=1:ncol(mat), m=2)
+  jacMat <- matrix(NA, nrow=ncol(mat), ncol=ncol(mat))
+  rownames(jacMat) <- colnames(jacMat) <- colnames(mat)
+  for(cc in 1:ncol(combs)){
+    jacMat[combs[1,cc], combs[2,cc]] <- calcJaccard(curde[,combs[1,cc]],
+                                                    curde[,combs[2,cc]])
+  }
+  # make symmetric
+  diag(jacMat) <- NA
+  jacMat[lower.tri(jacMat)] <- t(jacMat)[lower.tri(jacMat)]
+  return(jacMat)
+}
+
+jacMatList <- list()
+curdeList <- list()
+library(iCOBRA)
+for(kk in 1:length(cbdList)){
+  curpadj <- apply(pval(cbdList[[kk]]), 2, p.adjust, method="fdr")
+  curpadj[is.na(curpadj)] <- 1
+  curde <- curpadj <= 0.05
+  curdeList[[kk]] <- curde
+  curJacMat <- pairwiseJaccard(curde)
+  rn <- rownames(curJacMat)
+  rn[rn == "gcqn"] <- "GC-FQ"
+  rn[rn == "edaseq"] <- "FQ-FQ"
+  rn[rn == "gcqn_smooth"] <- "GC-FQ_smooth"
+  rn[rn == "uq"] <- "UQ"
+  rn[rn == "none"] <- "None"
+  rn[rn == "sum"] <- "Sum"
+  rownames(curJacMat) <- colnames(curJacMat) <- rn
+  jacMatList[[kk]] <- curJacMat
+}
+
+## average jaccard
+avJaccard <- Reduce('+', jacMatList) / length(jacMatList)
+library(pheatmap)
+diag(avJaccard) <- NA
+pheatmap(avJaccard, border=NA)
+
+phavjac <- pheatmap(avJaccard, border=NA, fontsize=18)
+```
+
+# Concordance analysis on clustering
+
+```{r}
+changeNames <- function(x){
+  names(x) <- unlist(lapply(strsplit(names(x), split=","), "[[", 2))
+  names(x)[names(x) == "gcqn_median_50"] <- "GC-FQ"
+  names(x)[names(x) == "gcqn_smooth"] <- "GC-FQ_smooth"
+  names(x)[names(x) == "edaseq"] <- "FQ-FQ"
+  names(x)[names(x) == "fq"] <- "FQ"
+  if("cqn_length" %in% names(x)){
+    x <- x[!names(x) == "cqn"]
+    names(x)[names(x) == "cqn_length"] <- "cqn"
+  }
+  names(x)[names(x) == "tmm"] <- "TMM"
+  names(x)[names(x) == "deseq"] <- "DESeq2"
+  names(x)[names(x) == "uq"] <- "UQ"
+  names(x)[names(x) == "none"] <- "None"
+  names(x)[names(x) == "sum"] <- "Sum"
+  return(x)
+}
+
+bioSil <- lapply(scores, function(x) x[,"BIO_SIL"]) 
+bioSil <- lapply(bioSil, changeNames)
+bioSil <- lapply(bioSil, function(x) x[order(names(x))])
+bioSil <- lapply(bioSil, function(x) x - mean(x))
+bioSilMat <- do.call(rbind, bioSil)
+# avSil <- Reduce('+', bioSil) / length(bioSil)
+par(bty='l')
+boxplot(bioSilMat, ylab="", ylab="")
+abline(h=0, col="red", lty=2)
+
+library(ggplot2)
+bioSilMat <- bioSilMat[,order(apply(bioSilMat,2,median), decreasing=TRUE)]
+orderedMethods <- colnames(bioSilMat)
+dfLong <- tidyr::gather(as.data.frame(bioSilMat))
+colnames(dfLong) <- c("method", "value")
+dfLong$method <- factor(dfLong$method, levels=colnames(bioSilMat))
+pSil <- ggplot(dfLong, aes(x=method, y=value)) +
+  theme_classic() + 
+  geom_boxplot() +
+  geom_hline(yintercept = 0, col="red", lty=2) +
+  ylab("Deviation from average silhouette") +
+  xlab("") +
+  theme(axis.text.x = element_text(angle = 360-25, size=18,
+                                   color=ifelse(orderedMethods %in% gcNormMethods,
+                                                 "dodgerblue", "black")),
+        axis.text.y = element_text(size=18),
+        axis.title.y = element_text(size=18))
+pSil
+```
+
+```{r}
+cowplot::plot_grid(phavjac[[4]], pSil, labels=letters[1:2],
+                   rel_widths = c(2/3, 1/3))
+ggsave("~/Dropbox/research/atacseq/bulk/plots/totalBenchmark_concordance.pdf",
+       height = 10, width = 20)
+```
+
+# Interaction of variable peak width with GC-bias
+
+Are datasets that use a constant peak width different as compared to datasets using variable peak widths with respect to sample-specific GC-content bias?
+Note we need to switch the sign again as these were all metrics where a high value was bad.
+
+```{r}
+medianPeakWidths <- readRDS("../../data/medianPeakWidths.rds")
+
+## Hellinger distance with uniform distribution across GC bins for mock
+helDistList <- lapply(simulationScores, function(x) x[[1]]$helDistVarGC)
+tmmHelDist <- unlist(lapply(helDistList, function(x) x[names(x) == "TMM"]))
+df <- data.frame(helDist = -tmmHelDist,
+                 dataset = names(helDistList),
+                 peakSize = "variable")
+df$peakSize <- as.character(df$peakSize)
+df$peakSize[df$dataset %in% c("bryois2018", "murphy2019")] <- "constant"
+df$peakSize <- factor(df$peakSize)
+df$medianWidth <- c(301, 492, 385, 980, 485, 201, 458, 500)
+
+pHelUnif <- ggplot(df, aes(x=peakSize, y=helDist, col=dataset)) +
+  geom_point() +
+  theme_classic() +
+  ggtitle("P-val uniform wrt GC") +
+  theme(legend.position = "none") +
+  xlab("Peak width") +
+  ylab("Hellinger distance")
+
+pHelUnifWidth <- ggplot(df, aes(x=medianWidth, y=helDist, col=dataset)) +
+  geom_point() +
+  theme_classic() +
+  ggtitle("P-val uniform wrt GC") +
+  theme(legend.position = "none") +
+  xlab("Median peak width") +
+  ylab("Hellinger distance")
+
+
+## Hellinger distance with true GC distribution of DA peaks
+helDistList <- lapply(simulationScores, function(x) x[[2]]$DAGCDistDiff)
+tmmHelDist <- unlist(lapply(helDistList, function(x) x[names(x) == "TMM"]))
+df <- data.frame(helDist = -tmmHelDist,
+                 dataset = names(helDistList),
+                 peakSize = "variable")
+df$peakSize <- as.character(df$peakSize)
+df$peakSize[df$dataset %in% c("bryois2018", "murphy2019")] <- "constant"
+df$peakSize <- factor(df$peakSize)
+df$medianWidth <- c(301, 492, 385, 980, 485, 201, 458, 500)
+
+
+pHelDA <- ggplot(df, aes(x=peakSize, y=helDist, col=dataset)) +
+  geom_point() +
+  theme_classic() +
+  ggtitle("GC dist of DA peaks") +
+  theme(legend.position = "none") +
+  xlab("Peak width") +
+  ylab("Cumulative distance")
+
+pHelDAWidth <- ggplot(df, aes(x=medianWidth, y=helDist, col=dataset)) +
+  geom_point() +
+  theme_classic() +
+  ggtitle("GC dist of DA peaks") +
+  theme(legend.position = "none") +
+  xlab("Median peak width") +
+  ylab("Cumulative distance")
+
+
+## RLE MED GC
+rleGCList <- lapply(scores, function(x) x[,"rleGC_med"])
+tmmrleGC <- unlist(lapply(rleGCList, function(x) x[grep(x=names(x), pattern="tmm")]))
+df <- data.frame(rleGC = -tmmrleGC,
+                 dataset = names(scores),
+                 peakSize = "variable")
+df$peakSize <- as.character(df$peakSize)
+df$peakSize[df$dataset %in% c("bryois2018", "murphy2019")] <- "constant"
+df$peakSize <- factor(df$peakSize)
+df$medianWidth <- c(301, 492, 385, 980, 485, 201, 458, 500)
+
+pRLEGC <- ggplot(df, aes(x=peakSize, y=rleGC, col=dataset)) +
+  geom_point() +
+  theme_classic() +
+  ggtitle("RLE_MED GC") +
+  xlab("Peak width") +
+  ylab("RLE value")
+
+pRLEGCWidth <- ggplot(df, aes(x=medianWidth, y=rleGC, col=dataset)) +
+  geom_point() +
+  theme_classic() +
+  ggtitle("RLE_MED GC") +
+  xlab("median peak width") +
+  ylab("RLE value")
+
+cowplot::plot_grid(pHelUnif, pHelDA, pRLEGC, 
+                   nrow=1, labels=letters[1:3],
+                   rel_widths = c(0.6, 0.6, 1))
+ggsave("~/Dropbox/research/atacseq/bulk/plots/GCPeakWidth.pdf",
+       height = 6, width = 11)
+
+cowplot::plot_grid(pHelUnifWidth, pHelDAWidth, pRLEGCWidth, 
+                   nrow=1, labels=letters[1:3],
+                   rel_widths = c(0.6, 0.6, 1))
+ggsave("~/Dropbox/research/atacseq/bulk/plots/GCPeakmedianWidth.pdf",
+       height = 6, width = 11)
+
+```
+
 

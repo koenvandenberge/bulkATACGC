@@ -12,3 +12,5 @@ The folders in this repository contain the following items.
 - methods folder: contains scripts on custom normalization methods, or functions for the scone benchmark.
 - objects folder: contains saved R objects. Either intermediate files that might be useful, or objects used for analysis.
 - scripts folder: contains data analysis scripts.
+
+Additionally, simulated datasets for each of the real datasets may be downloaded from Zenodo at https://zenodo.org/record/6109369.
