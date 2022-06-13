@@ -149,6 +149,26 @@ p1 <- ggplot(dfAll, aes(x=x, y=y, group=sample, color=sample)) +
   theme_classic()
 #  rm(lowListGC) ; gc()
 
+## seq depth
+dfLS <- data.frame(sample=1:6,
+                   libSize=colSums(counts[, celltype == "Memory_NK"]))
+dfLSAll <- merge(dfAll, dfLS, by="sample")
+dfLSAll$logLibSize <- log(dfLSAll$libSize)
+maxDf <- dfLSAll %>% group_by(sample) %>% summarize(maxX=max(x),
+                                                     maxY=max(y))
+
+p1LS <- ggplot(dfLSAll, aes(x=x, y=y, group=sample, color=sample)) +
+ # scale_color_gradient(low="yellow", high="red") +
+  geom_line(size = 1) +
+  xlab("GC-content") +
+  ylab("log(count + 1)") +
+  theme_classic() +
+  annotate(geom="text", x=maxDf$maxX,
+           y=dfLSAll[dfLSAll$x == maxDf$maxX[1], "y"], 
+           label=round(log(colSums(counts[,celltype == "Memory_NK"])),2),
+            color="red")
+p1LS
+ggsave("../../../../plots/figure1_libSize.pdf")
 
 # across all cell types
 set.seed(44)
@@ -477,7 +497,151 @@ pWidth
 ```
 
 
+# Composite plot for figure 1, including technical/biological GC origin
 
+## Liu
+
+```{r}
+## liu
+lrtTableListLiver <- readRDS("../../objects/technicalGC/liu_lrtTableListLiver.rds")
+lrtTableListHeart <- readRDS("../../objects/technicalGC/liu_lrtTableListHeart.rds")
+# remove duplicate comparisons
+lrtTableListLiver <- lrtTableListLiver[4:6]
+lrtTableListHeart <- lrtTableListHeart[4:6]
+lrtBioLiu <- readRDS("../../objects/technicalGC/liu_lrtBio.rds")
+gcContentLiu <- readRDS("../../objects/technicalGC/liu_gcContentPeaks.rds")
+
+for(ii in 1:length(lrtTableListHeart)){
+  par(bty='l')
+  curLowess <- lowess(x=gcContentLiu, y=lrtTableListHeart[[ii]]$logFC, f=1/5)
+  oo <- order(curLowess$x)
+  if(ii == 1){
+    heartDf <- data.frame(x=curLowess$x[oo],
+                          y=curLowess$y[oo],
+                          replicate=ii)
+  } else {
+    heartDf <- rbind(heartDf,
+                     data.frame(x=curLowess$x[oo],
+                          y=curLowess$y[oo],
+                          replicate=ii))
+  }
+}
+
+for(ii in 1:length(lrtTableListLiver)){
+  par(bty='l')
+  curLowess <- lowess(x=gcContentLiu, y=lrtTableListLiver[[ii]]$logFC, f=1/5)
+  oo <- order(curLowess$x)
+  if(ii == 1){
+    liverDf <- data.frame(x=curLowess$x[oo],
+                          y=curLowess$y[oo],
+                          replicate=ii + max(heartDf$replicate))
+  } else {
+    liverDf <- rbind(liverDf,
+                     data.frame(x=curLowess$x[oo],
+                          y=curLowess$y[oo],
+                          replicate=ii + max(heartDf$replicate)))
+  }
+}
+
+technicalDf <- rbind(heartDf, liverDf)
+
+
+lowessBio <- lowess(x=gcContentLiu, y=lrtBioLiu$table$logFC, f=1/10)
+oo <- order(lowessBio$x)
+allDf <- rbind(technicalDf,
+               data.frame(x=lowessBio$x[oo],
+                          y=lowessBio$y[oo],
+                          replicate=ii + max(technicalDf$replicate)))
+allDf$type <- factor(ifelse(allDf$replicate < max(allDf$replicate), "Within-group\n(technical)", "Between-group\n(biological)"))
+
+pLiu <- ggplot(allDf, aes(x=x, y=y, group=replicate, col=type)) +
+  theme_classic() +
+  geom_line() +
+  xlab("GC-content") +
+  ylab("Log2-fold-change") +
+  guides(col=guide_legend(title="Comparison")) +
+  geom_hline(yintercept=0)
+  #theme(legend.title = element_text("Comparison"))
+pLiu
+```
+
+## Torre-Ubieta
+
+```{r}
+lrtTableListCP <- readRDS("../../objects/technicalGC/torreUbieta_lrtTableListCP.rds")
+lrtTableListGZ <- readRDS("../../objects/technicalGC/torreUbieta_lrtTableListGZ.rds")
+# remove dup comparisons
+lrtTableListGZ <- lrtTableListGZ[1:3]
+lrtBioTU <- readRDS("../../objects/technicalGC/torreUbieta_lrtBio.rds")
+gcContentTU <- readRDS("../../objects/technicalGC/torreUbieta_gcContentPeaks.rds")
+
+for(ii in 1:length(lrtTableListCP)){
+  par(bty='l')
+  curLowess <- lowess(x=gcContentTU, y=lrtTableListCP[[ii]]$logFC, f=1/5)
+  oo <- order(curLowess$x)
+  if(ii == 1){
+    cpDf <- data.frame(x=curLowess$x[oo],
+                          y=curLowess$y[oo],
+                          replicate=ii)
+  } else {
+    cpDf <- rbind(cpDf,
+                     data.frame(x=curLowess$x[oo],
+                          y=curLowess$y[oo],
+                          replicate=ii))
+  }
+}
+
+for(ii in 1:length(lrtTableListGZ)){
+  par(bty='l')
+  curLowess <- lowess(x=gcContentTU, y=lrtTableListGZ[[ii]]$logFC, f=1/5)
+  oo <- order(curLowess$x)
+  if(ii == 1){
+    gzDf <- data.frame(x=curLowess$x[oo],
+                          y=curLowess$y[oo],
+                          replicate=ii + max(heartDf$replicate))
+  } else {
+    gzDf <- rbind(gzDf,
+                     data.frame(x=curLowess$x[oo],
+                          y=curLowess$y[oo],
+                          replicate=ii + max(heartDf$replicate)))
+  }
+}
+
+technicalDf <- rbind(cpDf, gzDf)
+
+
+lowessBio <- lowess(x=gcContentTU, y=lrtBioTU$table$logFC, f=1/10)
+oo <- order(lowessBio$x)
+allDf <- rbind(technicalDf,
+               data.frame(x=lowessBio$x[oo],
+                          y=lowessBio$y[oo],
+                          replicate=ii + max(technicalDf$replicate)))
+allDf$type <- factor(ifelse(allDf$replicate < max(allDf$replicate), "Within-group\n(technical)", "Between-group\n(biological)"))
+
+pTorre <- ggplot(allDf, aes(x=x, y=y, group=replicate, col=type)) +
+  theme_classic() +
+  geom_line() +
+  xlab("GC-content") +
+  ylab("Log2-fold-change") +
+  guides(col=guide_legend(title="Comparison")) +
+  geom_hline(yintercept=0)
+  #theme(legend.title = element_text("Comparison"))
+pTorre
+
+```
+
+## Composite figure
+
+```{r}
+pTech <- cowplot::plot_grid(pLiu + theme(legend.position="none") , 
+                            pTorre, 
+                            nrow=1, labels=letters[5:6], rel_widths=c(.43,.57))
+pTech
+pFig1All <- cowplot::plot_grid(p, pTech, nrow=2, rel_heights = c(2/3, 1/3))
+pFig1All
+ggsave("~/Dropbox/research/atacseq/bulk/plots/figure1_extended.png",
+       units="in", width=12, height=9)
+```
 
 
 

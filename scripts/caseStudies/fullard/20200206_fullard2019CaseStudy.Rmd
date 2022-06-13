@@ -638,9 +638,12 @@ leg <- ggpubr::get_legend(hlp)
 
 cols <- wesanderson::wes_palette("Zissou1", n=10, type="continuous")
 
-pcaAriPlots <- cowplot::plot_grid(pcaPlots[["GcqnSmooth"]] + ggtitle("") + labs(colour="Region", shape="Cell type") + coord_fixed(), 
-                                  ariRegion + scale_color_viridis_d(),
-                                  nrow=2, ncol=1, labels=c("a", "b"))
+pcaAriPlots <- cowplot::plot_grid(
+  pcaPlots[["GcqnSmooth"]] + ggtitle("") + labs(colour="Region", shape="Cell type") + coord_fixed(), 
+  #ariRegion + scale_color_viridis_d(),
+  ariRegion + scale_color_brewer(type="qual"),
+  nrow=2, ncol=1, labels=c("a", "b"))
+
 # fix scales
 maList <- list(pListHex[["edgeR"]]+ 
     ylim(c(-5, 4.5)) + 
@@ -664,7 +667,7 @@ cowplot::plot_grid(pcaAriPlots,
                    labels=c("", "c",""),
                    nrow=1, ncol=3,
                    rel_widths = c(1,1.2,.3))
-# ggsave("~/Dropbox/research/atacseq/bulk/plots/fullard_mainFigure.pdf", width=13, height=9)
+# ggsave("~/Dropbox/research/atacseq/bulk/plots/fullard_mainFigure_newColPal.pdf", width=13, height=9)
 ```
 
 

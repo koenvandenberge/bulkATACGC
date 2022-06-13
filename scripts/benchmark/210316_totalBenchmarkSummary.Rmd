@@ -9,26 +9,7 @@ output:
 ---
 
 
-We have the following evaluation metrics for a scone evaluation:
 
- - BIO_SIL
- - BATCH_SIL
- - PAM_SIL
- - EXP_QC_COR
- - EXP_UV_COR
- - RLE_MED_GC
- 
-In addition, we also simulate data, and use the following evaluation metrics:
-
- 1. Mock analysis using simulation:
-  - False positive rate: fraction of DA peaks at 5% level.
-  - p-value distribution difference from uniform distribution, using the Hellinger distance.
-  - Is p-value uniformity affected by GC-content: variability in this distance with respect to different GC-content bins.
-
- 2. DA analysis with signal, using simulation:
-  - AUROC
-  - Impact of GC on DA: how different is the GC-content distribution of DA peaks from the GC-content distribution of truly DA peaks? This again uses the Hellinger distance.
-  
 # Import and process scone evaluation
 
 Note that the scone scores have already been multiplied by (+/-)1 such that a high score corresponds to a good normalization.
@@ -102,14 +83,13 @@ simulationScores <- lapply(simulationScores, function(scoreList){
 })
 ```
 
+
 ```{r}
 # high is good
 simulationScores <- lapply(simulationScores, function(simScoreList){
   simScoreList[[1]]$fpr <- -abs(simScoreList[[1]]$fpr - 0.05)
   simScoreList[[1]]$distUnifPvalMock <- -simScoreList[[1]]$distUnifPvalMock
   simScoreList[[1]]$helDistVarGC <- -simScoreList[[1]]$helDistVarGC
-  # until fixed:
-  simScoreList[[2]]$DAGCDistDiff[is.na(simScoreList[[2]]$DAGCDistDiff)] <- 0
   simScoreList[[2]]$DAGCDistDiff <- -simScoreList[[2]]$DAGCDistDiff
   return(simScoreList)
 })
@@ -265,10 +245,28 @@ cowplot::plot_grid(plotlist = pDat,
                    labels=dats,
                    label_size = 11,
                    label_x = -0.025)
-ggsave("~/Dropbox/research/atacseq/bulk/plots/totalBenchmarkPerDataset.pdf",
-       height = 14, width = 12)
+# ggsave("~/Dropbox/research/atacseq/bulk/plots/totalBenchmarkPerDataset.pdf",
+#        height = 14, width = 12)
+```
+
+## Top methods for each performance class in each dataset
+
+Check which method performs best for each of normalization, DA, GC, in each dataset.
+
+```{r}
+topMethods <- dfAll %>% 
+  group_by(dataset, class, method) %>%
+  summarize(meanRank=mean(rank)) %>%
+  ungroup() %>%
+  group_by(class, dataset) %>%
+  summarize(topMethod = method[which.max(meanRank)])
+topMethods
+
+
+table(topMethods$topMethod, topMethods$class)
 
 ```
+
 
 ## Across all datasets
 
@@ -372,8 +370,8 @@ cowplot::plot_grid(pNormAll, pDAAll, pGCAll,
                      nrow = 1,
                      rel_widths = c(1.5, 1, 1))
 
-ggsave("~/Dropbox/research/atacseq/bulk/plots/totalBenchmarkSummary.pdf",
-       height = 6, width = 12)
+# ggsave("~/Dropbox/research/atacseq/bulk/plots/totalBenchmarkSummary.pdf",
+#        height = 6, width = 12)
 
 library(cowplot)
 imgFile <- "/Users/koenvandenberge/Dropbox/research/atacseq/bulk/plots/benchmarkSchemev1.png"
@@ -391,8 +389,8 @@ cowplot::plot_grid(pScheme,
                    nrow=2,
                    labels=letters[1:2],
                    rel_heights = c(3/4, 1))
-ggsave("~/Dropbox/research/atacseq/bulk/plots/totalBenchmarkSummary_scheme.pdf",
-       height = 15, width = 12)
+# ggsave("~/Dropbox/research/atacseq/bulk/plots/totalBenchmarkSummary_scheme.pdf",
+#        height = 15, width = 12)
 ```
 
 ## Include global overview
@@ -498,8 +496,8 @@ cowplot::plot_grid(pNormAll, pDAAll,
                      nrow = 1,
                      rel_widths = c(1.5, 1))
 
-ggsave("~/Dropbox/research/atacseq/bulk/plots/totalBenchmarkSummary_noGC.pdf",
-       height = 6, width = 10)
+# ggsave("~/Dropbox/research/atacseq/bulk/plots/totalBenchmarkSummary_noGC.pdf",
+#        height = 6, width = 10)
 ```
 
 ## For each benchmark component separately
@@ -621,9 +619,127 @@ cowplot::plot_grid(pNormOnly,
                    pGCOnly,
                    labels=letters[1:3],
                    nrow = 1)
-ggsave("~/Dropbox/research/atacseq/bulk/plots/totalBenchmark_perComponent.pdf",
-       width = 12, height = 6)
+# ggsave("~/Dropbox/research/atacseq/bulk/plots/totalBenchmark_perComponent.pdf",
+#        width = 12, height = 6)
 ```
+
+## All measures for all datasets separately
+
+```{r}
+dfAllOnlyNorm <- dfAll[dfAll$class == "norm",]
+dfAllOnlyDA <- dfAll[dfAll$class == "DAA",]
+dfAllOnlyGC <- dfAll[dfAll$class == "GC",]
+pDatList <- list()
+
+
+pDatList <- lapply(1:8, function(dd){ #loop across datasets
+  dfAllOnlyNormDat <- dfAllOnlyNorm[dfAllOnlyNorm$dataset == unique(dfAllOnlyNorm$dataset)[dd],]
+  avNormRanksDat <- dfAllOnlyNormDat %>%
+    group_by(method) %>%
+    summarize(avRank = mean(rank, na.rm=TRUE))
+  orderedMethodsDat <- as.character(avNormRanksDat$method[order(avNormRanksDat$avRank, decreasing=FALSE)])
+  
+  dfAllNormSummary <- dfAllOnlyNormDat %>% 
+    group_by(dataset, method) %>%
+    summarize(meanRank = mean(rank))
+  dfAllNormSummary$method <- factor(dfAllNormSummary$method, levels=orderedMethodsDat)
+  dfAllOnlyNormDat$method <- factor(dfAllOnlyNormDat$method, levels=orderedMethodsDat)
+
+  
+  pNormOnlyDat <- ggplot(dfAllOnlyNormDat, aes(x=metric, y=method, fill=rank)) +
+      geom_tile() +
+      scale_fill_gradient2() +
+    theme(legend.position = "none",
+            panel.background = element_blank(),
+            panel.grid.major = element_blank(), 
+            panel.grid.minor = element_blank(),
+          axis.text.x = element_text(angle = 25, size=9, vjust=.8, hjust=.35),
+          axis.text.y = element_text(size = 14, 
+                                     colour=ifelse(orderedMethodsDat %in% gcNormMethods,
+                                                   "dodgerblue", "black"))) +
+      scale_x_discrete(position = "top") +
+      ylab(NULL) +
+      xlab("Normalization \n performance")
+
+  ## DAA
+  dfAllOnlyDADat <- dfAllOnlyDA[dfAllOnlyDA$dataset == unique(dfAllOnlyDA$dataset)[dd],]
+  avDARanksDat <- dfAllOnlyDADat %>%
+    group_by(method) %>%
+    summarize(avRank = mean(rank, na.rm=TRUE))
+  orderedMethodsDat <- as.character(avDARanksDat$method[order(avDARanksDat$avRank, decreasing=FALSE)])
+  
+  dfAllDASummary <- dfAllOnlyDADat %>% 
+    group_by(dataset, method) %>%
+    summarize(meanRank = mean(rank))
+  dfAllDASummary$method <- factor(dfAllDASummary$method, levels=orderedMethodsDat)
+  dfAllOnlyDADat$method <- factor(dfAllOnlyDADat$method, levels=orderedMethodsDat)
+
+  pDAOnlyDat <- ggplot(dfAllOnlyDADat, aes(x=metric, y=method, fill=rank)) +
+      geom_tile() +
+    scale_fill_gradient2(low = "skyblue", high="steelblue") +
+    theme(legend.position = "none",
+            panel.background = element_blank(),
+            panel.grid.major = element_blank(), 
+            panel.grid.minor = element_blank(),
+          axis.text.x = element_text(angle = 25, size=9, vjust=.8, hjust=.35),
+          axis.text.y = element_text(size = 14, 
+                                     colour=ifelse(orderedMethodsDat %in% gcNormMethods,
+                                                   "dodgerblue", "black"))) +
+      scale_x_discrete(position = "top") +
+      ylab(NULL) +
+      xlab("Differential analysis\nperformance")
+
+  
+  # GC-content
+  dfAllOnlyGCDat <- dfAllOnlyGC[dfAllOnlyGC$dataset == unique(dfAllOnlyGC$dataset)[dd],]
+  avGCRanksDat <- dfAllOnlyGCDat %>%
+    group_by(method) %>%
+    summarize(avRank = mean(rank, na.rm=TRUE))
+  orderedMethodsDat <- as.character(avGCRanksDat$method[order(avGCRanksDat$avRank, decreasing=FALSE)])
+  
+  dfAllGCSummary <- dfAllOnlyGCDat %>% 
+    group_by(dataset, method) %>%
+    summarize(meanRank = mean(rank))
+  dfAllGCSummary$method <- factor(dfAllGCSummary$method, levels=orderedMethodsDat)
+  dfAllOnlyGCDat$method <- factor(dfAllOnlyGCDat$method, levels=orderedMethodsDat)
+
+  pGCOnlyDat <- ggplot(dfAllOnlyGCDat, aes(x=metric, y=method, fill=rank)) +
+      geom_tile() +
+    scale_fill_gradient2(low = "darkseagreen2", high="darkseagreen4") +
+    theme(legend.position = "none",
+            panel.background = element_blank(),
+            panel.grid.major = element_blank(), 
+            panel.grid.minor = element_blank(),
+          axis.text.x = element_text(angle = 25, size=9, vjust=.8, hjust=.35),
+          axis.text.y = element_text(size = 14, 
+                                     colour=ifelse(orderedMethodsDat %in% gcNormMethods,
+                                                   "dodgerblue", "black"))) +
+      scale_x_discrete(position = "top") +
+      ylab(NULL) +
+      xlab("GC-content bias \n removal")
+
+  pDat <- cowplot::plot_grid(pNormOnlyDat,
+                             pDAOnlyDat,
+                             pGCOnlyDat,
+                             nrow = 1, ncol=3)
+  curDataset <- datasets[dd]
+  substr(curDataset,1,1) <- toupper(substr(curDataset,1,1))
+  pDat <- pDat + geom_text(mapping = aes(x=0.08,y=.95, label=curDataset),
+                   fontface="bold")
+  
+  return(pDat)
+})
+  
+
+cowplot::plot_grid(plotlist=pDatList[1:4], nrow=4, ncol=1)
+# ggsave("../../../../plots/benchmark_allMeasures_perDataset1.pdf",
+#        width=8, height=10)
+
+cowplot::plot_grid(plotlist=pDatList[5:8], nrow=4, ncol=1)
+# ggsave("../../../../plots/benchmark_allMeasures_perDataset2.pdf",
+#        width=8, height=10)
+```
+
 
 # Concordance analysis on DA peaks
 
@@ -728,8 +844,8 @@ pSil
 ```{r}
 cowplot::plot_grid(phavjac[[4]], pSil, labels=letters[1:2],
                    rel_widths = c(2/3, 1/3))
-ggsave("~/Dropbox/research/atacseq/bulk/plots/totalBenchmark_concordance.pdf",
-       height = 10, width = 20)
+# ggsave("~/Dropbox/research/atacseq/bulk/plots/totalBenchmark_concordance.pdf",
+#        height = 10, width = 20)
 ```
 
 # Interaction of variable peak width with GC-bias
@@ -825,14 +941,14 @@ pRLEGCWidth <- ggplot(df, aes(x=medianWidth, y=rleGC, col=dataset)) +
 cowplot::plot_grid(pHelUnif, pHelDA, pRLEGC, 
                    nrow=1, labels=letters[1:3],
                    rel_widths = c(0.6, 0.6, 1))
-ggsave("~/Dropbox/research/atacseq/bulk/plots/GCPeakWidth.pdf",
-       height = 6, width = 11)
+# ggsave("~/Dropbox/research/atacseq/bulk/plots/GCPeakWidth.pdf",
+#        height = 6, width = 11)
 
 cowplot::plot_grid(pHelUnifWidth, pHelDAWidth, pRLEGCWidth, 
                    nrow=1, labels=letters[1:3],
                    rel_widths = c(0.6, 0.6, 1))
-ggsave("~/Dropbox/research/atacseq/bulk/plots/GCPeakmedianWidth.pdf",
-       height = 6, width = 11)
+# ggsave("~/Dropbox/research/atacseq/bulk/plots/GCPeakmedianWidth.pdf",
+#        height = 6, width = 11)
 
 ```
 

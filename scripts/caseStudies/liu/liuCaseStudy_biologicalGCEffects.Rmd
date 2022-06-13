@@ -1,0 +1,332 @@
+---
+title: "Liu 2019 ATAC-seq atlas: GC-content effect origins"
+author: "Koen Van den Berge"
+date: "3/28/2022"
+output: html_document
+---
+
+```{r}
+gcqn_qsmooth <- function(counts, gcGroups, bio){
+  gcBinNormCounts <- matrix(NA, nrow=nrow(counts), ncol=ncol(counts), dimnames=list(rownames(counts),colnames(counts)))
+  for(ii in 1:nlevels(gcGroups)){
+    id <- which(gcGroups==levels(gcGroups)[ii])
+    countBin <- counts[id,]
+    qs <- qsmooth(countBin, group_factor=bio)
+    normCountBin <- qs@qsmoothData
+    normCountBin <- round(normCountBin)
+    normCountBin[normCountBin<0] <- 0
+    gcBinNormCounts[id,] <- normCountBin
+  }
+  return(gcBinNormCounts)
+}
+library(GenomicAlignments)
+library(rafalib)
+library(cqn)
+library(Biobase)
+library(edgeR)
+library(mclust)
+library(umap)
+source("../../../methods/gcqn_validated.R")
+library(tidyverse)
+library(qsmooth)
+library(RUVSeq)
+library(RColorBrewer)
+plotGCHex <- function(gr, counts){
+  counts2 <- counts
+  df <- as_tibble(cbind(counts2,gc=mcols(gr)$gc))
+  df <- gather(df, sample, value, -gc)
+  ggplot(data=df, aes(x=gc, y=log(value+1)) ) + ylab("log(count + 1)") + xlab("GC content") + geom_hex(bins = 50) + theme_bw() + facet_wrap(~sample, nrow=2) + labs(fill="Number of peaks in hex.")
+}
+
+## read in counts
+counts <- read.table("../../../data/liu2019_atlas/ATACseq_Matrix/chromatin.accessibility.raw.count.txt", header=TRUE, stringsAsFactors = FALSE)
+peakNames <- as.character(counts[,1])
+peakNamesSplit <- strsplit(peakNames, split="_")
+# remove peaks in random chromosomes
+rmPeaks <- which(lapply(peakNamesSplit, length) == 4)
+counts <- counts[-rmPeaks,]
+peakNamesSplit <- peakNamesSplit[-rmPeaks]
+sn <- unlist(lapply(peakNamesSplit, "[[", 1))
+sn <- substr(sn, 4, nchar(sn))
+start <- as.numeric(unlist(lapply(peakNamesSplit, "[[", 2)))
+end <- as.numeric(unlist(lapply(peakNamesSplit, "[[", 3)))
+gr <- GRanges(seqnames=sn, ranges = IRanges(start=start, end=end), strand="*")
+names(gr) <- paste0("peak", 1:length(gr))
+
+# get GC content: please download genome at ftp://ftp.ensembl.org/pub/release-67/fasta/mus_musculus/dna/
+ff <- FaFile("~/data/genomes/mouse/Mus_musculus.NCBIM37.67.dna.toplevel.fa")
+peakSeqs <- getSeq(x=ff, gr)
+gcContentPeaks <- letterFrequency(peakSeqs, "GC",as.prob=TRUE)[,1]
+gcGroups <- Hmisc::cut2(gcContentPeaks, g=20)
+gcGroups50 <- Hmisc::cut2(gcContentPeaks, g=50)
+mcols(gr)$gc <- gcContentPeaks
+hist(gcContentPeaks, xlab="GC content", breaks=40)
+
+# remove peak ranges
+counts <- counts[,-1]
+# restrict to samples discussed in paper
+counts <- as.matrix(counts[,!substr(colnames(counts),1,2) == "D0"])
+
+# metadata
+gender <- factor(unlist(lapply(strsplit(colnames(counts), split="_"), "[[", 1)))
+tissue <- factor(unlist(lapply(strsplit(colnames(counts), split="_"), function(x){
+  paste0(x[2:(length(x)-1)], collapse="_")
+})))
+
+# define number of clusters and truth
+truth <- droplevels(interaction(gender, tissue))
+k <- nlevels(truth)
+
+# explore GC content effect in relation to average accessibility
+plotGCHex(gr, rowMeans(counts))
+```
+
+# Differential accessibility
+
+```{r}
+library(limma)
+library(edgeR)
+
+
+testEdgeR <- function(counts, design, L_tissue, tmm=FALSE, offset=NULL){
+  d <- DGEList(counts)
+  if(tmm) d <- calcNormFactors(d)
+  if(!is.null(offset)) d$offset <- offset
+  d <- estimateDisp(d, design)
+  fit <- glmFit(d, design)
+  lrt <- glmLRT(fit, contrast=L_tissue)
+  lrt$table$padj <- p.adjust(lrt$table$PValue, "fdr")
+  return(lrt)
+}
+
+covarDf <- data.frame(tissue, gender)
+
+
+design <- model.matrix(~tissue+gender)
+L_heartLiver <- matrix(0, nrow=ncol(design), ncol=1)
+rownames(L_heartLiver) <- colnames(design)
+L_heartLiver["tissueHeart",1] <- 1
+L_heartLiver["tissueLiver",1] <- -1
+
+resList <- list()
+normMethods <- c("Raw", "DESeq2", "EdgeR", "FQ", "EDASeq", "Cqn", "Gcqn", "GcqnSmooth")
+# for(mm in 1:length(normMethods)){
+#   message(mm)
+#   curMethod <- normMethods[mm]
+#   if(curMethod == "Raw"){
+#     resList[[mm]] <- testEdgeR(counts, design, L_heartLiver)
+#   } else if(curMethod == "DESeq2"){
+#     resList[[mm]] <- testDESeq2(counts, covarDf, L_heartLiver)
+#   } else if(curMethod == "EdgeR"){
+#     resList[[mm]] <- testEdgeR(counts, design, L_heartLiver, tmm=TRUE)
+#   } else if(curMethod == "Cqn"){
+#     resList[[mm]] <- testEdgeR(counts, design, L_heartLiver, offset=cqnObj$glm.offset)
+#   } else if(curMethod %in% c("FQ", "EDASeq", "Gcqn", "GcqnSmooth")){
+#     curCounts <- get(paste0("normCounts", curMethod))
+#     resList[[mm]] <- testEdgeR(curCounts, design, L_heartLiver)
+#   }
+# }
+# saveRDS(resList, file="resList.rds")
+```
+
+## Visualization
+
+```{r}
+resList <- readRDS("resList.rds")
+normMethods[which(normMethods == "EDASeq")] <- "FQ-FQ"
+normMethods[which(normMethods == "Gcqn")] <- "GC-FQ"
+normMethods[which(normMethods == "GcqnSmooth")] <- "smooth GC-FQ"
+normMethods[which(normMethods == "RUV")] <- "RUVSeq"
+names(resList) <- normMethods
+resList <- resList[-length(resList)]
+
+### visualization
+# fold change bias
+# png("~/Dropbox/research/atacseq/bulk/plots/liu_foldChange.png", width=8, units="in", height=7, res=200)
+mypar(mfrow=c(3,3), mar=c(4,4,2,1), bty='l', las=2, cex.axis=3/2, cex.lab=3/2, cex.main=2)
+for(ii in 1:length(resList)){
+  tab <- resList[[ii]]
+  
+  if(ii == 2){
+    boxplot(tab$log2FoldChange ~ gcGroups, ylim=c(2,-2), main=names(resList)[ii],
+            xaxt="n", xlab="GC-content bin", ylab="Log2 fold change")
+    abline(h=0, lwd=2, col="red", lty=2)
+  } else {
+    boxplot(tab$table$logFC ~ gcGroups, ylim=c(2,-2), main=names(resList)[ii],
+            xaxt="n", xlab="GC-content bin", ylab="Log2 fold change")
+    abline(h=0, lwd=2, col="red", lty=2)
+  }
+}
+# dev.off()
+
+gcBoxplot <- function(df, title, ylimits=c(2,2)){
+  ggplot(df) +
+  aes(x=gc, y=logFC, color=gc) +
+  geom_violin() +
+  geom_boxplot(width=0.1) +
+  scale_color_manual(values=wesanderson::wes_palette("Zissou1", nlevels(df$gc), "continuous")) +
+  geom_abline(intercept = 0, slope = 0, col="black", lty=2) +
+  geom_smooth(se=FALSE, color="blue", aes(group=1), lwd=1) +
+  theme_bw() +
+  ylim(ylimits) +
+  xlab("GC-content bin") +
+  ggtitle(title) +
+  theme(axis.text.x = element_text(size=0),
+        legend.position = "none",
+        axis.title = element_text(size=13))
+}
+
+# fold change bias ggplot
+pBoxList <- list()
+for(ii in 1:length(resList)){
+  tab <- resList[[ii]]
+  
+  if(ii == 2){
+    df <- data.frame(gc = gcGroups,
+                     logFC = tab$log2FoldChange)
+    pBoxList[[ii]] <- gcBoxplot(df, names(resList)[ii])
+  } else {
+    df <- data.frame(gc = gcGroups,
+                     logFC = tab$table$logFC)
+    pBoxList[[ii]] <- gcBoxplot(df, names(resList)[ii])
+  }
+}
+cowplot::plot_grid(plotlist = pBoxList)
+# ggsave("~/Dropbox/research/atacseq/bulk/plots/liu_foldChange_ggplot.png", width=8, height=7)
+# dev.off()
+
+
+
+```
+
+
+# Technical vs biological bias
+
+How much of the GC-content bias would be biological, and not technical?
+Compare within-group (between replicates within a biological group) log-FC bias to between-group log-FC bias.
+
+## Heart
+
+```{r}
+## within heart bias
+countsHeart <- counts[, tissue == "Heart"]
+subsetPossibilities <- combn(1:4,2)
+lrtTableListHeart <- list()
+for(ii in 1:ncol(subsetPossibilities)){
+  message(ii)
+  groups <- rep("A",4)
+  groups[subsetPossibilities[,ii]] <- "B"
+  curDesign <- model.matrix(~groups)
+  dHeart <- DGEList(countsHeart)
+  dHeart <- calcNormFactors(dHeart)
+  dHeart <- estimateDisp(dHeart, curDesign)
+  fitHeart <- glmFit(dHeart, curDesign)
+  lrtHeart <- glmLRT(fitHeart, coef=2)
+  lrtTableListHeart[[ii]] <- lrtHeart$table
+}
+
+pBoxListWithin <- list()
+for(ii in 1:length(lrtTableListHeart)){
+  curTab <- lrtTableListHeart[[ii]]
+  df <- data.frame(gc = gcGroups,
+                   logFC = curTab$logFC)
+  pBoxListWithin[[ii]] <- gcBoxplot(df, paste0("Heart: iteration ",ii), ylimits=c(-1,1))
+}
+
+# liver vs heart
+df <- data.frame(gc = gcGroups,
+                     logFC = resList[[3]]$table$logFC)
+pBoxListWithin[[7]] <- gcBoxplot(df, "Biological", ylimits=c(-1,1))
+
+cowplot::plot_grid(plotlist = pBoxListWithin)
+# ggsave("~/Dropbox/research/atacseq/bulk/plots/liu_HeartReplicatesLogFc.png", width=8, height=7)
+
+```
+
+## Liver
+
+```{r}
+## within liver bias
+countsLiver <- counts[, tissue == "Liver"]
+subsetPossibilities <- combn(1:4,2)
+lrtTableListLiver <- list()
+for(ii in 1:ncol(subsetPossibilities)){
+  message(ii)
+  groups <- rep("A",4)
+  groups[subsetPossibilities[,ii]] <- "B"
+  curDesign <- model.matrix(~groups)
+  dLiver <- DGEList(countsLiver)
+  dLiver <- calcNormFactors(dLiver)
+  dLiver <- estimateDisp(dLiver, curDesign)
+  fitLiver <- glmFit(dLiver, curDesign)
+  lrtLiver <- glmLRT(fitLiver, coef=2)
+  lrtTableListLiver[[ii]] <- lrtLiver$table
+}
+
+pBoxListWithin <- list()
+for(ii in 1:length(lrtTableListLiver)){
+  curTab <- lrtTableListLiver[[ii]]
+  df <- data.frame(gc = gcGroups,
+                   logFC = curTab$logFC)
+  pBoxListWithin[[ii]] <- gcBoxplot(df, paste0("Liver: iteration ",ii), ylimits=c(-1,1))
+}
+
+# liver vs heart
+lrtBio <- resList[[3]]
+df <- data.frame(gc = gcGroups,
+                     logFC = lrtBio$table$logFC)
+pBoxListWithin[[7]] <- gcBoxplot(df, "Biological", ylimits=c(-1,1))
+
+cowplot::plot_grid(plotlist = pBoxListWithin)
+# ggsave("~/Dropbox/research/atacseq/bulk/plots/liu_liverReplicatesLogFc.png", width=8, height=7)
+
+```
+
+# All on one plot
+
+```{r}
+for(ii in 1:length(lrtTableListHeart)){
+  par(bty='l')
+  curLowess <- lowess(x=gcContentPeaks, y=lrtTableListHeart[[ii]]$logFC, f=1/5)
+  oo <- order(curLowess$x)
+  if(ii == 1){
+    plot(x=curLowess$x[oo], y=curLowess$y[oo], type='l', ylim=c(-1, 1),
+         xlab = "GC-content", ylab = "Log-fold-change", col="gray")
+  } else {
+    lines(x=curLowess$x[oo], y=curLowess$y[oo], col="gray")
+  }
+}
+
+for(ii in 1:length(lrtTableListLiver)){
+  par(bty='l')
+  curLowess <- lowess(x=gcContentPeaks, y=lrtTableListLiver[[ii]]$logFC, f=1/5)
+  oo <- order(curLowess$x)
+  lines(x=curLowess$x[oo], y=curLowess$y[oo], col="gray")
+}
+
+
+lowessBio <- lowess(x=gcContentPeaks, y=lrtBio$table$logFC, f=1/10)
+oo <- order(lowessBio$x)
+lines(x=lowessBio$x[oo], y=lowessBio$y[oo], col="steelblue", lwd=2)
+abline(h=0, col="red")
+legend("topleft", c("Technical comparison", "Biological comparison"),
+       lty=1, col=c("grey", "steelblue"), bty='n', cex=1, lwd=2)
+```
+
+# Save objects
+
+```{r}
+saveRDS(lrtTableListHeart, file="../../../objects/technicalGC/liu_lrtTableListHeart.rds")
+saveRDS(lrtTableListLiver, file="../../../objects/technicalGC/liu_lrtTableListLiver.rds")
+saveRDS(lrtBio, file="../../../objects/technicalGC/liu_lrtBio.rds")
+saveRDS(gcContentPeaks, file="../../../objects/technicalGC/liu_gcContentPeaks.rds")
+```
+
+
+
+# Session info
+
+```{r}
+sessionInfo()
+```
+

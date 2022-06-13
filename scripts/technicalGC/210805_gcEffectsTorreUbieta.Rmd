@@ -121,6 +121,141 @@ pedgeR
 
 ```
 
+# Biological comparison
+
+Below, we compare the GZ and CP regions for patient A, the patient for whom we had also performed the mock comparison.
+
+```{r}
+subCounts <- counts[,patient == "A"]
+regionA <- region[patient == "A"]
+design <- model.matrix(~regionA)
+
+d <- DGEList(subCounts)
+d <- calcNormFactors(d)
+d <- estimateDisp(d, design)
+fit <- glmFit(d, design)
+lrtBio <- glmLRT(fit, coef=2)
+
+par(bty='l')
+boxplot(lrtBio$table$logFC ~ gcGroups,
+        ylim=c(-1,1), ylab="logFC", xlab="GC-content bin (low to high)",
+        xaxt="n")
+abline(h=0, col="red")
+```
+
+# All mock comparisons: Is bias technical or biological?
+
+Perform all within-group comparisons and contrast with the between-group comparison.
+
+```{r}
+subCountsGZ <- counts[,patient == "A" & region == "GZ"]
+subsetPossibilities <- combn(1:4,2)
+lrtTableListGZ <- list()
+for(ii in 1:ncol(subsetPossibilities)){
+  message(ii)
+  groups <- rep("A",4)
+  groups[subsetPossibilities[,ii]] <- "B"
+  curDesign <- model.matrix(~groups)
+  dGZ <- DGEList(subCountsGZ)
+  dGZ <- calcNormFactors(dGZ)
+  dGZ <- estimateDisp(dGZ, curDesign)
+  fitGZ <- glmFit(dGZ, curDesign)
+  lrtGZ <- glmLRT(fitGZ, coef=2)
+  lrtTableListGZ[[ii]] <- lrtGZ$table
+}
+
+
+subCountsCP <- counts[,patient == "A" & region == "CP"]
+subsetPossibilities <- combn(1:3,1)
+lrtTableListCP <- list()
+for(ii in 1:ncol(subsetPossibilities)){
+  message(ii)
+  groups <- rep("A",3)
+  groups[subsetPossibilities[,ii]] <- "B"
+  curDesign <- model.matrix(~groups)
+  dCP <- DGEList(subCountsCP)
+  dCP <- calcNormFactors(dCP)
+  dCP <- estimateDisp(dCP, curDesign)
+  fitCP <- glmFit(dCP, curDesign)
+  lrtCP <- glmLRT(fitCP, coef=2)
+  lrtTableListCP[[ii]] <- lrtCP$table
+}
+
+## within group GZ
+rafalib::mypar(mfrow=c(3,2))
+for(ii in 1:length(lrtTableListGZ)){
+  par(bty='l')
+  boxplot(lrtTableListGZ[[ii]]$logFC ~ gcGroups,
+          ylim=c(-1,1), ylab="logFC", xlab="GC-content bin (low to high)",
+          xaxt="n")
+  abline(h=0, col="red")
+}
+
+## within group CP
+rafalib::mypar(mfrow=c(2,2))
+for(ii in 1:length(lrtTableListCP)){
+  par(bty='l')
+  boxplot(lrtTableListCP[[ii]]$logFC ~ gcGroups,
+          ylim=c(-1,1), ylab="logFC", xlab="GC-content bin (low to high)",
+          xaxt="n")
+  abline(h=0, col="red")
+}
+
+## between groups
+rafalib::mypar(mfrow=c(1,1))
+par(bty='l')
+boxplot(lrtBio$table$logFC ~ gcGroups,
+        ylim=c(-1,1), ylab="logFC", xlab="GC-content bin (low to high)",
+        xaxt="n", main="Between-group")
+abline(h=0, col="red")
+
+```
+
+## All on one figure
+
+```{r}
+
+for(ii in 1:length(lrtTableListGZ)){
+  par(bty='l')
+  curLowess <- lowess(x=gcContentPeaks, y=lrtTableListGZ[[ii]]$logFC, f=1/5)
+  oo <- order(curLowess$x)
+  if(ii == 1){
+    plot(x=curLowess$x[oo], y=curLowess$y[oo], type='l', ylim=c(-1/2, 1/2),
+         xlab = "GC-content", ylab = "Log-fold-change", col="gray")
+  } else {
+    lines(x=curLowess$x[oo], y=curLowess$y[oo], col="gray")
+  }
+}
+
+for(ii in 1:length(lrtTableListCP)){
+  par(bty='l')
+  curLowess <- lowess(x=gcContentPeaks, y=lrtTableListCP[[ii]]$logFC, f=1/5)
+  oo <- order(curLowess$x)
+  lines(x=curLowess$x[oo], y=curLowess$y[oo], col="gray")
+}
+
+
+lowessBio <- lowess(x=gcContentPeaks, y=lrtBio$table$logFC, f=1/10)
+oo <- order(lowessBio$x)
+lines(x=lowessBio$x[oo], y=lowessBio$y[oo], col="steelblue", lwd=2)
+abline(h=0, col="red")
+legend("topleft", c("Technical comparison", "Biological comparison"),
+       lty=1, col=c("grey", "steelblue"), bty='n', cex=1, lwd=2)
+
+```
+
+# Save objects
+
+```{r}
+saveRDS(lrtTableListGZ, file="../../objects/technicalGC/torreUbieta_lrtTableListGZ.rds")
+saveRDS(lrtTableListCP, file="../../objects/technicalGC/torreUbieta_lrtTableListCP.rds")
+saveRDS(lrtBio, file="../../objects/technicalGC/torreUbieta_lrtBio.rds")
+saveRDS(gcContentPeaks, file="../../objects/technicalGC/torreUbieta_gcContentPeaks.rds")
+
+```
+
+
+
 
 # Lowess fits
 

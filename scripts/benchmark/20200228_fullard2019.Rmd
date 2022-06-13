@@ -37,7 +37,7 @@ gr <- GRanges(seqnames=sn, ranges = IRanges(start=start, end=end), strand="*")
 names(gr) <- peaks$name
 
 # get GC content
-ff <- FaFile("~/data/genomes/human/Homo_sapiens.GRCh37.75.dna_sm.primary_assembly.fa")
+ff <- FaFile("~/data/genomes/human/Homo_sapiens.GRCh37.75.dna_sm.primary_assembly.fa.gz")
 peakSeqs <- getSeq(x=ff, gr)
 gcContentPeaks <- letterFrequency(peakSeqs, "GC",as.prob=TRUE)[,1]
 gcGroups <- Hmisc::cut2(gcContentPeaks, g=20)

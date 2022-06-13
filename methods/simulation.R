@@ -99,11 +99,12 @@ evaluateSimulation <- function(simCounts,
   grpSim <- factor(grpSim)
   design <- model.matrix(~grpSim)
   
-  testEdgeR <- function(counts, design, tmm=FALSE, offset=NULL, uq=FALSE){
+  testEdgeR <- function(counts, design, tmm=FALSE, offset=NULL, uq=FALSE, none=FALSE){
     d <- DGEList(counts)
     if(uq) d <- calcNormFactors(d, method = "upperquartile")
     if(tmm) d <- calcNormFactors(d)
     if(!is.null(offset)) d$offset <- offset
+    if(none) d$samples$lib.size <- 1
     d <- estimateDisp(d, design)
     fit <- glmFit(d, design)
     lrt <- glmLRT(fit, coef=2)
@@ -178,7 +179,7 @@ evaluateSimulation <- function(simCounts,
   
   
   # none
-  resNone <- testEdgeR(simCounts, design, tmm=FALSE)
+  resNone <- testEdgeR(simCounts, design, tmm=FALSE, none=TRUE)
   # upper-quartile
   resUQ <- testEdgeR(simCounts, design, tmm=FALSE, uq=TRUE)
   # sum
