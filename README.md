@@ -1,5 +1,8 @@
 # Normalization benchmark of bulk ATAC-seq data
 
+[![DOI](https://zenodo.org/badge/269151763.svg)](https://zenodo.org/badge/latestdoi/269151763)
+
+
 This repository contains code to reproduce analyses reported in our normalization benchmark paper.
 
 To run the code, please first

@@ -403,7 +403,7 @@ joyDat <- data.frame(lc=lc,
                      sample=rep(1:3, each=nrow(countsN)))
 axText <- 0
 pRidge1 <- joyDat %>% ggplot(aes(y=gc)) + 
-  geom_density_ridges(aes(x=lc)) + 
+  geom_density_ridges(aes(x=lc), bandwidth = 0.1) + 
   facet_wrap(.~sample, nrow=1) +
   theme_ridges(grid=FALSE, font_size=5, center_axis_labels = TRUE) + 
   xlim(c(1.5,9)) +
